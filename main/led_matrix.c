@@ -101,6 +101,9 @@ void led_matrix_set_brightness(uint8_t new_brightness) {
 }
 
 esp_err_t led_matrix_display_image(const led_matrix_image_t *image) {
+    if (image == NULL || image->pixels == NULL)
+        return ESP_ERR_INVALID_ARG;
+    
     if (image->width != s_config.width)
         return ESP_ERR_INVALID_SIZE;
 
@@ -118,5 +121,22 @@ esp_err_t led_matrix_display_image(const led_matrix_image_t *image) {
         }
     }
 
+    return led_matrix_show();
+}
+
+esp_err_t led_matrix_render_framebuffer(const framebuffer_t *fb) {
+    if (fb == NULL || fb->pixels == NULL) return ESP_ERR_INVALID_ARG;
+    if (fb->width != s_config.width || fb->height != s_config.height) return ESP_ERR_INVALID_SIZE;
+    
+    for (int y = 0; y < fb->height; y++) {
+        for (int x = 0; x < fb->width; x++) {
+            int image_index = y * fb->width + x;
+            const rgb_t *pixel = &fb->pixels[image_index];
+            esp_err_t err_set_pixel = led_matrix_set_pixel(x, y, pixel->r, pixel->g, pixel->b);
+            if (err_set_pixel != ESP_OK) {
+                return err_set_pixel;
+            }
+        }
+    }
     return led_matrix_show();
 }

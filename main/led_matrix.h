@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 #include "esp_err.h"
+#include "framebuffer.h"
+#include "graphics_types.h"
 
 
 #define BLINK_GPIO 4
@@ -27,17 +29,6 @@ typedef struct {
     led_matrix_layout_t layout;
 } led_matrix_config_t;
 
-typedef struct {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-} rgb_t;
-
-typedef struct {
-    uint16_t width;
-    uint16_t height;
-    const rgb_t *pixels;
-} led_matrix_image_t;
 
 esp_err_t led_matrix_init(const led_matrix_config_t *config);
 esp_err_t led_matrix_clear(void);
@@ -45,3 +36,4 @@ esp_err_t led_matrix_set_pixel(int x, int y, uint8_t red, uint8_t green, uint8_t
 void led_matrix_set_brightness(uint8_t new_brightness);
 esp_err_t led_matrix_show(void);
 esp_err_t led_matrix_display_image(const led_matrix_image_t *image);
+esp_err_t led_matrix_render_framebuffer(const framebuffer_t *fb);
