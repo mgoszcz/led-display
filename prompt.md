@@ -47,7 +47,7 @@ Current modules:
     - show/refresh
     - brightness application
     - rendering a full framebuffer
-  - Should not know image names, image registry, Wi-Fi, UART commands, or application state.
+  - Should not know image names, image registry, Wi-Fi, HTTP, UART commands, or application state.
 
 - `framebuffer.h` / `framebuffer.c`
   - RAM drawing surface.
@@ -55,9 +55,11 @@ Current modules:
   - Handles:
     - init
     - clear
+    - fill
     - set pixel
     - draw image at destination coordinates
-  - Should not know about GPIO, RMT, serpentine layout, or physical LED ordering.
+    - draw raw RGB888 frame data
+  - Should not know about GPIO, RMT, serpentine layout, physical LED ordering, Wi-Fi, or HTTP.
 
 - `images.h` / `images.c`
   - Built-in image assets compiled into firmware.
@@ -70,24 +72,66 @@ Current modules:
 - `image_store.h` / `image_store.c`
   - Application-facing image lookup layer.
   - Currently delegates to built-in images.
+  - Current API returns `esp_err_t` and writes the found image through an output pointer.
   - In the future, it should hide whether an image comes from firmware, flash filesystem, Wi-Fi upload, or another backend.
+
+- `wifi_app.h` / `wifi_app.c`
+  - Wi-Fi infrastructure module.
+  - Starts Wi-Fi in station mode.
+  - Uses project configuration from Kconfig / `sdkconfig`.
+  - Initializes NVS, netif, event loop, default STA interface, Wi-Fi driver, and connection.
+  - Handles Wi-Fi disconnect reconnect attempts and logs IP on `IP_EVENT_STA_GOT_IP`.
+  - Should not know about framebuffer, LED matrix, images, or HTTP endpoints.
+
+- `http_server_app.h` / `http_server_app.c`
+  - HTTP infrastructure module.
+  - Starts ESP-IDF HTTP server.
+  - Currently exposes:
+    - `GET /health` -> `OK`
+  - Keeps server handle as static module state.
+  - Should not directly know LED matrix internals. For future frame upload, prefer a callback or app-controller layer.
+
+- `main/Kconfig.projbuild`
+  - Project menuconfig options:
+    - Wi-Fi SSID
+    - Wi-Fi password
+    - Wi-Fi maximum retry count
 
 - `main.c`
   - Current demo application.
-  - Initializes the matrix and framebuffer.
+  - Initializes framebuffer, LED matrix, Wi-Fi, and HTTP server.
   - Looks up predefined images.
   - Draws each image into the framebuffer.
   - Renders framebuffer to the LED matrix in a simple loop.
 
 # Current Render Flow
 
-Current flow:
+Current built-in image flow:
 
 ```text
-image_store_find("name")
+image_store_get("name", &image)
+        |
+        v
+framebuffer_clear()
         |
         v
 framebuffer_draw_image()
+        |
+        v
+led_matrix_render_framebuffer()
+        |
+        v
+WS2812B matrix
+```
+
+Planned raw HTTP frame flow:
+
+```text
+POST /frame
+body: RGBRGBRGB...
+        |
+        v
+framebuffer_draw_rgb888()
         |
         v
 led_matrix_render_framebuffer()
@@ -157,27 +201,20 @@ typedef struct {
 } image_entry_t;
 ```
 
-## 3. Image Store - INITIAL VERSION DONE
+## 3. Image Store - DONE FOR CURRENT NEEDS
 
 Current API:
-
-```c
-const led_matrix_image_t *image_store_find(const char *name);
-```
-
-Current behavior:
-
-- Looks up images by name.
-- Returns a pointer to the image if found.
-- Returns `NULL` if not found.
-
-Possible future API:
 
 ```c
 esp_err_t image_store_get(const char *name, const led_matrix_image_t **out_image);
 ```
 
-This would better match ESP-IDF style and allow `ESP_ERR_NOT_FOUND`.
+Current behavior:
+
+- Looks up images by name.
+- Returns `ESP_OK` and writes the image pointer when found.
+- Returns `ESP_ERR_NOT_FOUND` when not found.
+- Returns `ESP_ERR_INVALID_ARG` for invalid arguments.
 
 ## 4. Framebuffer - INITIAL VERSION DONE
 
@@ -194,21 +231,51 @@ typedef struct {
 Current framebuffer functions:
 
 - `framebuffer_init()`
+- `framebuffer_fill()`
 - `framebuffer_clear()`
 - `framebuffer_set_pixel()`
 - `framebuffer_draw_image()`
+- `framebuffer_draw_rgb888()`
 
 Current behavior:
 
 - Framebuffer is a mutable RAM drawing surface.
 - Built-in images are copied into the framebuffer before rendering.
+- Raw RGB888 data can be copied into the framebuffer.
+- `framebuffer_draw_rgb888()` currently expects a full-frame payload matching framebuffer width and height.
 - `led_matrix_render_framebuffer()` sends the framebuffer to the physical LED matrix.
 
-Still worth improving:
+## 5. Wi-Fi Infrastructure - INITIAL VERSION DONE
 
-- Propagate errors returned by `framebuffer_set_pixel()` inside `framebuffer_draw_image()`.
-- Decide whether off-screen drawing should fail or be clipped.
-- Consider adding `framebuffer_fill()`.
+Current behavior:
+
+- Uses STA mode.
+- Wi-Fi settings are configured through Kconfig / `sdkconfig`.
+- Initializes NVS with recovery for `ESP_ERR_NVS_NO_FREE_PAGES` and `ESP_ERR_NVS_NEW_VERSION_FOUND`.
+- Registers Wi-Fi and IP event handlers.
+- Retries Wi-Fi connection up to configured retry count.
+- Logs the assigned IP address.
+
+Current config options:
+
+```text
+CONFIG_WIFI_SSID
+CONFIG_WIFI_PASSWORD
+CONFIG_WIFI_MAX_RETRY
+```
+
+## 6. HTTP Server - INITIAL VERSION DONE
+
+Current behavior:
+
+- Starts ESP-IDF HTTP server.
+- Keeps `httpd_handle_t` as static module state.
+- `http_server_app_start()` is idempotent.
+- Current endpoint:
+
+```text
+GET /health -> OK
+```
 
 # Current Near-Term Architecture
 
@@ -227,21 +294,86 @@ Avoid adding FreeRTOS tasks until there is a real need for independent input/ren
 
 # Next Milestone
 
-Focus on hardening the current architecture before adding new features.
+Implement the first useful HTTP endpoint:
 
-1. Finish public API validation.
-2. Decide whether to replace `image_store_find()` with `image_store_get()`.
-3. Add `framebuffer_fill()`.
-4. Clean up unused includes and unused variables.
-5. Add a small helper in `main.c` or app layer for:
-
-```c
-lookup image -> clear framebuffer -> draw image -> render framebuffer
+```text
+POST /frame
+Content-Type: application/octet-stream
+Body: 768 bytes for 16x16 RGB888
 ```
 
-6. Add UART control only after the current framebuffer flow is stable.
+Suggested design:
+
+- `http_server_app` receives the request body.
+- `http_server_app` should not directly manipulate the LED matrix.
+- Prefer passing a callback from `main.c` / app layer:
+
+```c
+typedef esp_err_t (*http_frame_handler_t)(const uint8_t *data, size_t len);
+```
+
+Frame handling flow:
+
+```text
+HTTP handler
+    |
+    v
+app callback
+    |
+    v
+framebuffer_draw_rgb888()
+    |
+    v
+led_matrix_render_framebuffer()
+```
+
+First test can be done with `curl` or a small local script before building the web pixel editor.
+
+# Known Issues For Future
+
+These are known improvement areas. They are not all blockers for the next small milestone.
+
+- `wifi_app_start()` starts Wi-Fi and begins connecting, but it does not wait until `IP_EVENT_STA_GOT_IP`. For later reliability, add `wifi_app_wait_connected(timeout_ms)` or an event group.
+- HTTP server currently starts immediately after `wifi_app_start()`. This is acceptable for `/health`, but future user-facing endpoints may want to wait for Wi-Fi connection/IP.
+- Kconfig symbols are currently generic: `CONFIG_WIFI_SSID`, `CONFIG_WIFI_PASSWORD`, `CONFIG_WIFI_MAX_RETRY`. Later consider prefixing them, for example `CONFIG_LED_DISPLAY_WIFI_SSID`.
+- Wi-Fi retry handling logs failure after max retries, but does not expose a connection status or failure state to the application.
+- `wifi_app` has no stop/deinit function yet. Add only when lifecycle requires it.
+- `http_server_app` has no stop function yet. Add `http_server_app_stop()` when needed.
+- `http_server_app` currently only owns `/health`. For `/frame`, avoid coupling it directly to framebuffer and LED matrix; use callback or app-controller.
+- `led_matrix` should eventually validate that it has been initialized before public operations.
+- Consider returning `esp_err_t` from `led_matrix_set_brightness()`.
+- Keep public API argument validation consistent across all modules.
+- Decide later whether off-screen drawing should fail or clip. Current framebuffer image drawing requires the image to fit.
+- `framebuffer_draw_rgb888()` currently supports only full-frame payloads. That is intentional for the first HTTP MVP.
+- Current demo loop continuously cycles built-in images. When HTTP frame upload arrives, the demo loop will overwrite uploaded frames unless application state is introduced.
+- `sdkconfig` may contain Wi-Fi credentials. It is ignored by git now; keep it that way unless credentials are removed.
 
 # Future Roadmap
+
+## Web Pixel Editor
+
+Short-term product goal:
+
+```text
+Browser 16x16 grid editor
+        |
+        v
+POST /frame raw RGB888
+        |
+        v
+ESP32 framebuffer
+        |
+        v
+LED matrix
+```
+
+Preferred order:
+
+1. Implement `POST /frame`.
+2. Test with generated raw RGB888 data.
+3. Build a local browser-based 16x16 editor.
+4. Send frames from browser to ESP32.
+5. Later host the web UI directly from ESP32.
 
 ## UART Control
 
@@ -276,6 +408,7 @@ Later introduce:
 - selected image
 - brightness
 - animation state
+- current input source, for example demo loop, HTTP frame, UART command, animation
 
 ## Event-Driven Architecture
 
@@ -286,6 +419,7 @@ EVENT_SET_PIXEL
 EVENT_CLEAR
 EVENT_SET_BRIGHTNESS
 EVENT_SHOW_IMAGE
+EVENT_SHOW_RAW_FRAME
 EVENT_START_ANIMATION
 EVENT_STOP_ANIMATION
 ```
@@ -379,22 +513,14 @@ Tasks:
 - Test all four corners.
 - Verify orientation and serpentine behavior.
 
-## Wi-Fi Image Upload
+## Persistent Wi-Fi Image Upload
 
-Start with a simple HTTP server.
-
-Example endpoint:
+Later endpoints may look like:
 
 ```text
-POST /image
-```
-
-Initial raw payload idea:
-
-```text
-width
-height
-RGBRGBRGB...
+POST /images/{name}
+GET /images
+DELETE /images/{name}
 ```
 
 Future storage:
@@ -433,4 +559,3 @@ Future ideas:
 - Web UI for uploads
 - Snake / Tetris / Conway's Game of Life
 - MQTT / Home Assistant integration
-
