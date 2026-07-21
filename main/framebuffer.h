@@ -27,3 +27,13 @@ esp_err_t framebuffer_draw_image(framebuffer_t *fb,
                                  const led_matrix_image_t *image,
                                  int dst_x,
                                  int dst_y);
+
+esp_err_t framebuffer_fill(framebuffer_t *fb,
+                                rgb_t color);
+
+esp_err_t framebuffer_draw_rgb888(framebuffer_t *fb,
+                                    uint16_t width,
+                                    uint16_t height,
+                                    const uint8_t *data,
+                                    size_t data_len
+);

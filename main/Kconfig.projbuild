@@ -1,0 +1,16 @@
+menu "LED Display Configuration"
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default ""
+
+    config WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+
+    config WIFI_MAX_RETRY
+        int "WiFi maximum retry count"
+        default 5
+        range 0 20
+
+endmenu
