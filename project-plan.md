@@ -88,8 +88,22 @@ Current modules:
   - Starts ESP-IDF HTTP server.
   - Currently exposes:
     - `GET /health` -> `OK`
+    - `POST /frame` -> accepts one full raw RGB888 frame
+    - `POST /demo` -> enables demo mode again
   - Keeps server handle as static module state.
-  - Should not directly know LED matrix internals. For future frame upload, prefer a callback or app-controller layer.
+  - Uses callbacks passed from `main.c` so it does not directly know framebuffer or LED matrix internals.
+
+- `tools/pixel-editor.html`
+  - Local browser-based 16x16 pixel editor.
+  - Supports:
+    - ESP32 IP input
+    - `GET /health` check
+    - drawing pixels with selected color
+    - right-click erase
+    - clear grid
+    - brightness scaling before send
+    - `POST /frame`
+    - `POST /demo`
 
 - `main/Kconfig.projbuild`
   - Project menuconfig options:
@@ -98,11 +112,13 @@ Current modules:
     - Wi-Fi maximum retry count
 
 - `main.c`
-  - Current demo application.
+  - Current application entry point.
   - Initializes framebuffer, LED matrix, Wi-Fi, and HTTP server.
   - Looks up predefined images.
-  - Draws each image into the framebuffer.
-  - Renders framebuffer to the LED matrix in a simple loop.
+  - Runs a simple built-in image demo on startup.
+  - Provides HTTP callbacks:
+    - frame upload disables demo mode and renders uploaded frame
+    - demo endpoint enables demo mode again
 
 # Current Render Flow
 
@@ -124,11 +140,14 @@ led_matrix_render_framebuffer()
 WS2812B matrix
 ```
 
-Planned raw HTTP frame flow:
+Raw HTTP frame flow:
 
 ```text
 POST /frame
 body: RGBRGBRGB...
+        |
+        v
+http_server_app callback
         |
         v
 framebuffer_draw_rgb888()
@@ -141,6 +160,24 @@ WS2812B matrix
 ```
 
 This is the preferred direction. The application should talk to `image_store` for image lookup and to `framebuffer` for drawing. The `led_matrix` module should remain the low-level hardware renderer.
+
+Current local web editor flow:
+
+```text
+tools/pixel-editor.html
+        |
+        v
+POST /frame raw RGB888, 768 bytes
+        |
+        v
+ESP32 HTTP server
+        |
+        v
+framebuffer
+        |
+        v
+LED matrix
+```
 
 # Completed Milestones
 
@@ -271,11 +308,31 @@ Current behavior:
 - Starts ESP-IDF HTTP server.
 - Keeps `httpd_handle_t` as static module state.
 - `http_server_app_start()` is idempotent.
-- Current endpoint:
+- Uses callbacks for application-specific behavior.
+- Adds CORS response header for local browser tooling:
+
+```text
+Access-Control-Allow-Origin: *
+```
+
+Current endpoints:
 
 ```text
 GET /health -> OK
+POST /frame -> raw RGB888 frame, exactly 768 bytes
+POST /demo -> enables startup demo again
 ```
+
+## 7. First Interactive Pixel Editor - INITIAL VERSION DONE
+
+Current behavior:
+
+- Local standalone HTML page in `tools/pixel-editor.html`.
+- User can draw a 16x16 frame in the browser.
+- The page sends raw RGB888 bytes to `POST /frame`.
+- A brightness slider scales RGB values during send.
+- The editor does not yet save/load drawings.
+- The editor is local only; it is not hosted by ESP32 yet.
 
 # Current Near-Term Architecture
 
@@ -294,40 +351,31 @@ Avoid adding FreeRTOS tasks until there is a real need for independent input/ren
 
 # Next Milestone
 
-Implement the first useful HTTP endpoint:
+Stabilize the first interactive drawing workflow:
 
 ```text
-POST /frame
-Content-Type: application/octet-stream
-Body: 768 bytes for 16x16 RGB888
+Browser pixel editor
+        |
+        v
+ESP32 /frame
+        |
+        v
+LED matrix
 ```
 
-Suggested design:
+Suggested next steps:
 
-- `http_server_app` receives the request body.
-- `http_server_app` should not directly manipulate the LED matrix.
-- Prefer passing a callback from `main.c` / app layer:
-
-```c
-typedef esp_err_t (*http_frame_handler_t)(const uint8_t *data, size_t len);
-```
-
-Frame handling flow:
-
-```text
-HTTP handler
-    |
-    v
-app callback
-    |
-    v
-framebuffer_draw_rgb888()
-    |
-    v
-led_matrix_render_framebuffer()
-```
-
-First test can be done with `curl` or a small local script before building the web pixel editor.
+1. Flash current firmware and verify:
+   - `/health` from browser editor
+   - `/frame` from browser editor
+   - `/demo` from browser editor
+   - brightness slider behavior
+2. Decide whether brightness should remain client-side for now or become a real device setting.
+3. Add minimal status/error logging around HTTP frame uploads.
+4. Consider extracting demo/application mode handling out of `main.c` when it starts growing.
+5. Decide the next product direction:
+   - keep using local HTML during development
+   - or host the editor directly from ESP32
 
 # Known Issues For Future
 
@@ -339,20 +387,25 @@ These are known improvement areas. They are not all blockers for the next small 
 - Wi-Fi retry handling logs failure after max retries, but does not expose a connection status or failure state to the application.
 - `wifi_app` has no stop/deinit function yet. Add only when lifecycle requires it.
 - `http_server_app` has no stop function yet. Add `http_server_app_stop()` when needed.
-- `http_server_app` currently only owns `/health`. For `/frame`, avoid coupling it directly to framebuffer and LED matrix; use callback or app-controller.
+- HTTP server CORS support is minimal. Current endpoints work with simple browser requests, but future custom headers may require `OPTIONS` handling.
 - `led_matrix` should eventually validate that it has been initialized before public operations.
 - Consider returning `esp_err_t` from `led_matrix_set_brightness()`.
 - Keep public API argument validation consistent across all modules.
 - Decide later whether off-screen drawing should fail or clip. Current framebuffer image drawing requires the image to fit.
 - `framebuffer_draw_rgb888()` currently supports only full-frame payloads. That is intentional for the first HTTP MVP.
-- Current demo loop continuously cycles built-in images. When HTTP frame upload arrives, the demo loop will overwrite uploaded frames unless application state is introduced.
+- Demo/application mode is currently simple shared state in `main.c`. This is acceptable for MVP, but should become a small app-state module or event-driven flow later.
+- `s_demo_enabled` is touched by HTTP server callbacks and the main loop. For now it works as a simple MVP, but later introduce a safer app-state/event queue approach.
+- Local editor brightness is client-side only. It scales the RGB payload but does not change global LED matrix brightness.
+- `tools/pixel-editor.html` is not hosted by ESP32 yet.
+- Local editor does not support save/load/import/export yet.
+- Current `/frame` endpoint accepts only full 16x16 frames. Partial updates or single-pixel control are future work.
 - `sdkconfig` may contain Wi-Fi credentials. It is ignored by git now; keep it that way unless credentials are removed.
 
 # Future Roadmap
 
 ## Web Pixel Editor
 
-Short-term product goal:
+Current short-term product goal:
 
 ```text
 Browser 16x16 grid editor
@@ -369,11 +422,22 @@ LED matrix
 
 Preferred order:
 
-1. Implement `POST /frame`.
-2. Test with generated raw RGB888 data.
-3. Build a local browser-based 16x16 editor.
-4. Send frames from browser to ESP32.
-5. Later host the web UI directly from ESP32.
+1. Implement `POST /frame`. DONE
+2. Test with generated raw RGB888 data. DONE
+3. Build a local browser-based 16x16 editor. DONE
+4. Send frames from browser to ESP32. IN PROGRESS / VERIFY ON DEVICE
+5. Add simple save/load/export for drawings.
+6. Later host the web UI directly from ESP32.
+
+Potential next editor features:
+
+- Export/import JSON.
+- Export C array for built-in firmware images.
+- Save recent IP address in browser local storage.
+- Preview sent payload brightness separately from editing colors.
+- Add predefined palette.
+- Add fill bucket or line tool.
+- Add grid coordinate display.
 
 ## UART Control
 
