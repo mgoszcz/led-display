@@ -116,6 +116,10 @@
       background: #287cff;
     }
 
+    .hidden {
+      display: none;
+    }
+
     .status {
       min-height: 24px;
       color: #c9c9c9;
@@ -217,8 +221,13 @@
       </label>
 
       <button id="clearButton" type="button">CLEAR</button>
+      <button id="saveButton" type="button">SAVE</button>
+      <button id="loadButton" type="button">LOAD</button>
+      <button id="exportButton" type="button">EXPORT</button>
+      <button id="importButton" type="button">IMPORT</button>
       <button id="demoButton" type="button">DEMO</button>
       <button id="sendButton" class="primary" type="button">SEND</button>
+      <input id="importInput" class="hidden" type="file" accept="application/json,.json">
     </section>
 
     <div id="status" class="status">Ready.</div>
@@ -229,7 +238,9 @@
       <aside class="side">
         <div><strong>Left click</strong>: paint selected color</div>
         <div><strong>Right click</strong>: erase pixel</div>
-        <div><strong>Brightness</strong>: scales RGB values while sending</div>
+        <div><strong>Brightness</strong>: sends value to <code>/brightness</code></div>
+        <div><strong>Save/Load</strong>: stores one drawing in this browser</div>
+        <div><strong>Export/Import</strong>: uses a JSON drawing file</div>
         <div><strong>Send</strong>: POST raw RGB888 frame to <code>/frame</code></div>
         <div><strong>Demo</strong>: POST to <code>/demo</code></div>
       </aside>
@@ -247,11 +258,17 @@
     const brightnessInput = document.getElementById("brightnessInput");
     const brightnessValue = document.getElementById("brightnessValue");
     const clearButton = document.getElementById("clearButton");
+    const saveButton = document.getElementById("saveButton");
+    const loadButton = document.getElementById("loadButton");
+    const exportButton = document.getElementById("exportButton");
+    const importButton = document.getElementById("importButton");
+    const importInput = document.getElementById("importInput");
     const demoButton = document.getElementById("demoButton");
     const sendButton = document.getElementById("sendButton");
     const statusEl = document.getElementById("status");
     const gridEl = document.getElementById("grid");
 
+    const STORAGE_KEY = "led-matrix-pixel-editor-frame";
     const pixels = Array.from({ length: MATRIX_WIDTH * MATRIX_HEIGHT }, () => ({ r: 0, g: 0, b: 0 }));
     let isPointerDown = false;
     let eraseMode = false;
@@ -287,14 +304,6 @@
       return `rgb(${color.r}, ${color.g}, ${color.b})`;
     }
 
-    function getBrightnessScale() {
-      return Number(brightnessInput.value) / 100;
-    }
-
-    function scaleChannel(value, scale) {
-      return Math.max(0, Math.min(255, Math.round(value * scale)));
-    }
-
     function updateBrightnessValue() {
       brightnessValue.textContent = `${brightnessInput.value}%`;
     }
@@ -302,6 +311,12 @@
     function setPixel(index, color) {
       pixels[index] = { ...color };
       gridEl.children[index].style.background = colorToCss(color);
+    }
+
+    function applyPixels(nextPixels) {
+      for (let i = 0; i < pixels.length; i++) {
+        setPixel(i, nextPixels[i]);
+      }
     }
 
     function paintCell(cell, erase) {
@@ -312,15 +327,63 @@
 
     function buildFrameBytes() {
       const bytes = new Uint8Array(FRAME_BYTES);
-      const brightnessScale = getBrightnessScale();
 
       for (let i = 0; i < pixels.length; i++) {
-        bytes[i * 3 + 0] = scaleChannel(pixels[i].r, brightnessScale);
-        bytes[i * 3 + 1] = scaleChannel(pixels[i].g, brightnessScale);
-        bytes[i * 3 + 2] = scaleChannel(pixels[i].b, brightnessScale);
+        bytes[i * 3 + 0] = pixels[i].r;
+        bytes[i * 3 + 1] = pixels[i].g;
+        bytes[i * 3 + 2] = pixels[i].b;
       }
 
       return bytes;
+    }
+
+    function createDrawingSnapshot() {
+      return {
+        version: 1,
+        width: MATRIX_WIDTH,
+        height: MATRIX_HEIGHT,
+        brightness: Number(brightnessInput.value),
+        pixels: pixels.map((pixel) => [pixel.r, pixel.g, pixel.b]),
+      };
+    }
+
+    function parseDrawingSnapshot(value) {
+      const snapshot = typeof value === "string" ? JSON.parse(value) : value;
+
+      if (!snapshot || snapshot.width !== MATRIX_WIDTH || snapshot.height !== MATRIX_HEIGHT) {
+        throw new Error(`Expected ${MATRIX_WIDTH}x${MATRIX_HEIGHT} drawing.`);
+      }
+
+      if (!Array.isArray(snapshot.pixels) || snapshot.pixels.length !== pixels.length) {
+        throw new Error(`Expected ${pixels.length} pixels.`);
+      }
+
+      const nextPixels = snapshot.pixels.map((pixel) => {
+        if (!Array.isArray(pixel) || pixel.length !== 3) {
+          throw new Error("Invalid pixel data.");
+        }
+
+        const [r, g, b] = pixel.map((channel) => Number(channel));
+        if (![r, g, b].every((channel) => Number.isInteger(channel) && channel >= 0 && channel <= 255)) {
+          throw new Error("Pixel channel must be an integer from 0 to 255.");
+        }
+
+        return { r, g, b };
+      });
+
+      return {
+        brightness: Number.isInteger(snapshot.brightness) ? snapshot.brightness : null,
+        pixels: nextPixels,
+      };
+    }
+
+    function applyDrawingSnapshot(snapshot) {
+      applyPixels(snapshot.pixels);
+
+      if (snapshot.brightness !== null) {
+        brightnessInput.value = String(Math.max(1, Math.min(100, snapshot.brightness)));
+        updateBrightnessValue();
+      }
     }
 
     function clearGrid() {
@@ -328,6 +391,56 @@
         setPixel(i, { r: 0, g: 0, b: 0 });
       }
       setStatus("Grid cleared.");
+    }
+
+    function saveDrawing() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(createDrawingSnapshot()));
+      setStatus("Drawing saved in this browser.", "ok");
+    }
+
+    function loadDrawing() {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (!saved) {
+        setStatus("No saved drawing found.", "error");
+        return;
+      }
+
+      try {
+        applyDrawingSnapshot(parseDrawingSnapshot(saved));
+        setStatus("Drawing loaded from this browser.", "ok");
+      } catch (error) {
+        setStatus(`Load failed: ${error.message}`, "error");
+      }
+    }
+
+    function exportDrawing() {
+      const content = JSON.stringify(createDrawingSnapshot(), null, 2);
+      const blob = new Blob([content], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+      link.href = url;
+      link.download = `led-matrix-16x16-${timestamp}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setStatus("Drawing exported as JSON.", "ok");
+    }
+
+    async function importDrawing(file) {
+      if (!file) {
+        return;
+      }
+
+      try {
+        const content = await file.text();
+        applyDrawingSnapshot(parseDrawingSnapshot(content));
+        setStatus(`Imported ${file.name}.`, "ok");
+      } catch (error) {
+        setStatus(`Import failed: ${error.message}`, "error");
+      } finally {
+        importInput.value = "";
+      }
     }
 
     async function checkHealth() {
@@ -360,6 +473,26 @@
         }
       } catch (error) {
         setStatus(`Frame request failed: ${error.message}`, "error");
+      }
+    }
+
+    async function sendBrightness() {
+      updateBrightnessValue();
+
+      try {
+        const response = await fetch(`${getBaseUrl()}/brightness`, {
+          method: "POST",
+          body: brightnessInput.value,
+        });
+
+        const text = await response.text();
+        if (response.ok) {
+          setStatus(`Brightness set to ${brightnessInput.value}%: ${text || "OK"}`, "ok");
+        } else {
+          setStatus(`Brightness failed: ${response.status} ${text}`, "error");
+        }
+      } catch (error) {
+        setStatus(`Brightness request failed: ${error.message}`, "error");
       }
     }
 
@@ -417,9 +550,15 @@
 
     checkButton.addEventListener("click", checkHealth);
     clearButton.addEventListener("click", clearGrid);
+    saveButton.addEventListener("click", saveDrawing);
+    loadButton.addEventListener("click", loadDrawing);
+    exportButton.addEventListener("click", exportDrawing);
+    importButton.addEventListener("click", () => importInput.click());
+    importInput.addEventListener("change", () => importDrawing(importInput.files[0]));
     sendButton.addEventListener("click", sendFrame);
     demoButton.addEventListener("click", enableDemo);
     brightnessInput.addEventListener("input", updateBrightnessValue);
+    brightnessInput.addEventListener("change", sendBrightness);
 
     updateBrightnessValue();
     createGrid();

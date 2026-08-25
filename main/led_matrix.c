@@ -2,12 +2,12 @@
 #include "led_strip.h"
 
 static led_strip_handle_t led_strip = NULL;
-uint8_t brightness = 20; // 0-255
+static uint8_t s_brightness_raw = 20; // 0-255
 static led_matrix_config_t s_config;
 
 static uint8_t apply_brightness(uint8_t value)
 {
-    return (value * brightness) / 255;
+    return (value * s_brightness_raw) / 255;
 }
 
 static int xy_to_index(int x, int y)
@@ -97,7 +97,7 @@ esp_err_t led_matrix_show(void) {
 }
 
 void led_matrix_set_brightness(uint8_t new_brightness) {
-    brightness = new_brightness;
+    s_brightness_raw = (255 * new_brightness) / 100; // Convert 0-100 to 0-255
 }
 
 esp_err_t led_matrix_display_image(const led_matrix_image_t *image) {

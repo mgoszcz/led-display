@@ -101,9 +101,12 @@ Current modules:
     - drawing pixels with selected color
     - right-click erase
     - clear grid
-    - brightness scaling before send
+    - save/load in browser local storage
+    - export/import JSON file
+    - brightness slider using `POST /brightness`
     - `POST /frame`
     - `POST /demo`
+  - Verified with the ESP32 device in the current local workflow.
 
 - `main/Kconfig.projbuild`
   - Project menuconfig options:
@@ -330,8 +333,10 @@ Current behavior:
 - Local standalone HTML page in `tools/pixel-editor.html`.
 - User can draw a 16x16 frame in the browser.
 - The page sends raw RGB888 bytes to `POST /frame`.
-- A brightness slider scales RGB values during send.
-- The editor does not yet save/load drawings.
+- The editor supports save/load in browser local storage.
+- The editor supports export/import as JSON files.
+- A brightness slider sends the selected value to `POST /brightness`.
+- Health check, frame upload, demo trigger, and brightness control have been verified on device.
 - The editor is local only; it is not hosted by ESP32 yet.
 
 # Current Near-Term Architecture
@@ -365,13 +370,9 @@ LED matrix
 
 Suggested next steps:
 
-1. Flash current firmware and verify:
-   - `/health` from browser editor
-   - `/frame` from browser editor
-   - `/demo` from browser editor
-   - brightness slider behavior
-2. Decide whether brightness should remain client-side for now or become a real device setting.
-3. Add minimal status/error logging around HTTP frame uploads.
+1. Add minimal status/error logging around HTTP frame uploads.
+2. Decide the first image transfer format beyond raw RGB888.
+3. Start designing text rendering as animation-oriented drawing.
 4. Consider extracting demo/application mode handling out of `main.c` when it starts growing.
 5. Decide the next product direction:
    - keep using local HTML during development
@@ -395,10 +396,14 @@ These are known improvement areas. They are not all blockers for the next small 
 - `framebuffer_draw_rgb888()` currently supports only full-frame payloads. That is intentional for the first HTTP MVP.
 - Demo/application mode is currently simple shared state in `main.c`. This is acceptable for MVP, but should become a small app-state module or event-driven flow later.
 - `s_demo_enabled` is touched by HTTP server callbacks and the main loop. For now it works as a simple MVP, but later introduce a safer app-state/event queue approach.
-- Local editor brightness is client-side only. It scales the RGB payload but does not change global LED matrix brightness.
+- Decide whether `led_matrix_set_brightness()` should store brightness as percent or raw 0-255 internally. Current API direction is percent from HTTP/UI.
+- Automatic brightness based on ambient light is a future hardware/software feature, likely using a photoresistor or light sensor.
 - `tools/pixel-editor.html` is not hosted by ESP32 yet.
-- Local editor does not support save/load/import/export yet.
+- Local editor save/load currently uses one browser local storage slot only. Multiple named drawings are future work.
 - Current `/frame` endpoint accepts only full 16x16 frames. Partial updates or single-pixel control are future work.
+- There is no agreed higher-level image upload format yet. Raw RGB888 is good for MVP, but stored/uploaded images may need metadata such as width, height, name, format, and encoding.
+- Photo/image conversion is not implemented yet. Future tooling should resize, crop, quantize, and brightness-correct images for the target matrix resolution.
+- Text rendering is not implemented yet. It will likely share animation infrastructure because useful text display needs scrolling or timed frame updates.
 - `sdkconfig` may contain Wi-Fi credentials. It is ignored by git now; keep it that way unless credentials are removed.
 
 # Future Roadmap
@@ -425,9 +430,10 @@ Preferred order:
 1. Implement `POST /frame`. DONE
 2. Test with generated raw RGB888 data. DONE
 3. Build a local browser-based 16x16 editor. DONE
-4. Send frames from browser to ESP32. IN PROGRESS / VERIFY ON DEVICE
-5. Add simple save/load/export for drawings.
-6. Later host the web UI directly from ESP32.
+4. Send frames from browser to ESP32. DONE
+5. Add simple save/load/export for drawings. DONE
+6. Add device-side brightness control. DONE
+7. Later host the web UI directly from ESP32.
 
 Potential next editor features:
 
@@ -438,6 +444,44 @@ Potential next editor features:
 - Add predefined palette.
 - Add fill bucket or line tool.
 - Add grid coordinate display.
+
+## Brightness Control
+
+Current behavior:
+
+- The local editor sends brightness changes to `POST /brightness`.
+- `/frame` sends raw RGB888 data without client-side brightness scaling.
+- Device brightness is applied by `led_matrix` while rendering.
+- Changing brightness re-renders the current framebuffer immediately.
+
+Current implementation:
+
+```text
+POST /brightness
+body: brightness percent, 0-100
+        |
+        v
+app callback
+        |
+        v
+led_matrix_set_brightness()
+        |
+        v
+led_matrix_render_framebuffer(current framebuffer)
+```
+
+Important behavior:
+
+- Changing brightness should update the LEDs immediately.
+- `led_matrix_set_brightness()` only changes the brightness state.
+- The application callback calls `led_matrix_render_framebuffer()` after changing brightness to push recalculated pixel values to the LED strip.
+
+Future automatic brightness:
+
+- Add photoresistor or light sensor input.
+- Read ambient light with ADC or sensor driver.
+- Map ambient light to LED brightness.
+- Smooth changes over time to avoid visible jumping.
 
 ## UART Control
 
@@ -532,6 +576,27 @@ Initial animation ideas:
 - rainbow
 - fade
 - animated smiley
+- scrolling text
+
+## Text Rendering
+
+Text should be treated as a drawing/animation feature, not as a low-level LED matrix feature.
+
+Likely building blocks:
+
+- Small bitmap font, for example 5x7 or 6x8.
+- Function that draws one glyph into the framebuffer.
+- Function that draws a string at an `x, y` position.
+- Scrolling text implemented by moving the string position over time.
+
+Possible future endpoint:
+
+```text
+POST /text
+body: text, color, speed, mode
+```
+
+The endpoint should probably create an animation/state command rather than directly writing one static frame.
 
 ## Image Creation Workflow
 
@@ -553,6 +618,48 @@ ESP-IDF firmware
 Future tool:
 
 - `png_to_c.py`
+
+## Image Upload And Conversion
+
+Raw RGB888 works well for the first live frame endpoint, but it is not necessarily the best long-term format for user-uploaded images.
+
+Possible input formats:
+
+- Raw RGB888 frame:
+  - simplest for ESP32
+  - no metadata
+  - good for live preview
+- JSON with metadata and pixel data:
+  - easy to inspect/debug
+  - larger payload
+  - reasonable for small 16x16 images
+- PNG/JPEG upload:
+  - familiar to users
+  - likely better converted in browser or desktop tooling first
+  - decoding on ESP32 is possible but more complexity than needed now
+
+Preferred short-term direction:
+
+```text
+PNG/JPEG in browser or local tool
+        |
+        v
+resize/crop to 16x16 or 32x16
+        |
+        v
+convert to RGB888
+        |
+        v
+POST /frame or save/export
+```
+
+Useful conversion options:
+
+- fit vs crop
+- nearest-neighbor vs smooth resize
+- brightness/gamma correction
+- palette reduction
+- preview before send
 
 ## Dual Matrix 32x16
 

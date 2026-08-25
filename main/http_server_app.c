@@ -2,6 +2,7 @@
 #include "esp_check.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include <stdlib.h>
 
 #define FRAME_SIZE_BYTES (16 * 16 * 3)
 
@@ -9,6 +10,7 @@ static const char *TAG = "HTTP_SERVER_APP";
 static httpd_handle_t s_server = NULL;
 static http_frame_handler_t s_frame_handler = NULL;
 static http_demo_handler_t s_demo_handler = NULL;
+static http_brightness_handler_t s_brightness_handler = NULL;
 
 static void set_cors_headers(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -75,6 +77,48 @@ static esp_err_t demo_enable_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static esp_err_t brightness_handler(httpd_req_t *req) {
+    set_cors_headers(req);
+
+    if (req->content_len == 0 || req->content_len > 3) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid brightness length");
+        return ESP_FAIL;
+    }
+
+    // Tworzysz tablicę 4 znaków.
+    // Dlaczego 4? Bo największa wartość jasności to "100", czyli 3 znaki, a string w C musi mieć jeszcze znak końca '\0'.
+    char body[4] = {0};
+
+    // Tutaj ESP-IDF czyta body requesta i wpisuje odebrane bajty do body.
+    int received = httpd_req_recv(req, body, req->content_len);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive body");
+        return ESP_FAIL;
+    }
+
+
+    // To jest ważny moment: ręcznie kończysz string.
+    // httpd_req_recv() odbiera surowe bajty, a nie string C. Ono nie dopisuje '\0'.
+    // po dopisaniu ręcznie możesz potem użyć funkcji stringowych, np.:
+    body[received] = '\0';
+
+    char *end = NULL;
+    long value = strtol(body, &end, 10);
+
+    if (*end != '\0' || value < 0 || value > 100) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid brightness value");
+        return ESP_FAIL;
+    }
+    esp_err_t err = s_brightness_handler((uint8_t)value);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to set brightness");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+}
+
 static const httpd_uri_t health_check_uri = {
     .uri = "/health",
     .method = HTTP_GET,
@@ -96,7 +140,14 @@ static const httpd_uri_t demo_enable_uri = {
     .user_ctx = NULL
 };
 
-esp_err_t http_server_app_start(http_frame_handler_t frame_handler, http_demo_handler_t demo_handler) {
+static const httpd_uri_t brightness_uri = {
+    .uri = "/brightness",
+    .method = HTTP_POST,
+    .handler = brightness_handler,
+    .user_ctx = NULL
+};
+
+esp_err_t http_server_app_start(http_frame_handler_t frame_handler, http_demo_handler_t demo_handler, http_brightness_handler_t brightness_handler) {
     if (frame_handler == NULL) {
         ESP_LOGE(TAG, "Frame handler cannot be NULL");
         return ESP_ERR_INVALID_ARG;
@@ -105,8 +156,13 @@ esp_err_t http_server_app_start(http_frame_handler_t frame_handler, http_demo_ha
         ESP_LOGE(TAG, "Demo handler cannot be NULL");
         return ESP_ERR_INVALID_ARG;
     }
+    if (brightness_handler == NULL) {
+        ESP_LOGE(TAG, "Brightness handler cannot be NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
     s_frame_handler = frame_handler;
     s_demo_handler = demo_handler;
+    s_brightness_handler = brightness_handler;
     if (s_server != NULL) {
         return ESP_OK;
     }
@@ -117,11 +173,12 @@ esp_err_t http_server_app_start(http_frame_handler_t frame_handler, http_demo_ha
     esp_err_t err = httpd_register_uri_handler(s_server, &health_check_uri);
     esp_err_t err2 = httpd_register_uri_handler(s_server, &frame_draw_uri);
     esp_err_t err3 = httpd_register_uri_handler(s_server, &demo_enable_uri);
-    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK) {
+    esp_err_t err4 = httpd_register_uri_handler(s_server, &brightness_uri);
+    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register URI handler");
         httpd_stop(s_server);
         s_server = NULL;
-        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : err3);
+        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : err4));
     }
     return ESP_OK;
 }

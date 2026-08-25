@@ -36,6 +36,23 @@ static esp_err_t handle_demo_enable(void)
     return ESP_OK;
 }
 
+static esp_err_t handle_brightness(int brightness)
+{
+    if (brightness < 0 || brightness > 100) {
+        ESP_LOGE(TAG, "Brightness value out of range: %d", brightness);
+        return ESP_ERR_INVALID_ARG;
+    }
+    led_matrix_set_brightness((uint8_t)brightness);
+
+    ESP_RETURN_ON_ERROR(
+        led_matrix_render_framebuffer(&fb),
+        TAG,
+        "Failed to render framebuffer after brightness change"
+    );
+    ESP_LOGI(TAG, "Brightness set to: %d", brightness);
+    return ESP_OK;
+}
+
 static void demo_delay(void)
 {
     for (int i = 0; i < 50; i++) {
@@ -65,7 +82,7 @@ void app_main(void)
     
     ESP_ERROR_CHECK(led_matrix_init(&config));
     ESP_ERROR_CHECK(wifi_app_start());
-    ESP_ERROR_CHECK(http_server_app_start(handle_frame_upload, handle_demo_enable));
+    ESP_ERROR_CHECK(http_server_app_start(handle_frame_upload, handle_demo_enable, handle_brightness));
 
     ESP_ERROR_CHECK(led_matrix_clear());
     
