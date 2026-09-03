@@ -1,5 +1,9 @@
 #include "led_matrix.h"
 #include "led_strip.h"
+#include "esp_log.h"
+
+#define LED_MATRIX_MAX_BRIGHTNESS_RAW 30
+#define LED_MATRIX_MAX_PIXEL_POWER 40
 
 static led_strip_handle_t led_strip = NULL;
 static uint8_t s_brightness_raw = 20; // 0-255
@@ -8,6 +12,17 @@ static led_matrix_config_t s_config;
 static uint8_t apply_brightness(uint8_t value)
 {
     return (value * s_brightness_raw) / 255;
+}
+static void limit_pixel_power(uint8_t *r, uint8_t *g, uint8_t *b) {
+    uint16_t sum = *r + *g + *b;
+
+    if (sum <= LED_MATRIX_MAX_PIXEL_POWER) {
+        return;
+    }
+
+    *r =  (*r * LED_MATRIX_MAX_PIXEL_POWER) / sum;
+    *g =  (*g * LED_MATRIX_MAX_PIXEL_POWER) / sum;
+    *b =  (*b * LED_MATRIX_MAX_PIXEL_POWER) / sum;
 }
 
 static int xy_to_index(int x, int y)
@@ -83,12 +98,16 @@ esp_err_t led_matrix_set_pixel(int x, int y, uint8_t red, uint8_t green, uint8_t
         return ESP_ERR_INVALID_ARG;
     }
     int index = xy_to_index(x, y);
+    uint8_t r = apply_brightness(red);
+    uint8_t g = apply_brightness(green);
+    uint8_t b = apply_brightness(blue);
+    limit_pixel_power(&r, &g, &b);
     return led_strip_set_pixel(
         led_strip, 
         index, 
-        apply_brightness(red), 
-        apply_brightness(green), 
-        apply_brightness(blue)
+        r,
+        g,
+        b
     );
 }
 
@@ -97,7 +116,8 @@ esp_err_t led_matrix_show(void) {
 }
 
 void led_matrix_set_brightness(uint8_t new_brightness) {
-    s_brightness_raw = (255 * new_brightness) / 100; // Convert 0-100 to 0-255
+    s_brightness_raw = (LED_MATRIX_MAX_BRIGHTNESS_RAW * new_brightness) / 100; // Convert 0-100 to 0-255
+    ESP_LOGI("led_matrix", "Brightness set to %d (raw: %d)", new_brightness, s_brightness_raw);
 }
 
 esp_err_t led_matrix_display_image(const led_matrix_image_t *image) {

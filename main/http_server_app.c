@@ -85,22 +85,33 @@ static esp_err_t brightness_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    // Tworzysz tablicę 4 znaków.
-    // Dlaczego 4? Bo największa wartość jasności to "100", czyli 3 znaki, a string w C musi mieć jeszcze znak końca '\0'.
+    // The largest valid brightness text is "100", plus one byte for the string terminator.
     char body[4] = {0};
 
-    // Tutaj ESP-IDF czyta body requesta i wpisuje odebrane bajty do body.
-    int received = httpd_req_recv(req, body, req->content_len);
-    if (received <= 0) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive body");
-        return ESP_FAIL;
+    size_t received_total = 0;
+
+    while (received_total < req->content_len) {
+        int received = httpd_req_recv(
+            req,
+            body + received_total,
+            req->content_len - received_total
+        );
+
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Request timeout");
+            return ESP_FAIL;
+        }
+
+        if (received <= 0) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive body");
+            return ESP_FAIL;
+        }
+
+        received_total += received;
     }
 
-
-    // To jest ważny moment: ręcznie kończysz string.
-    // httpd_req_recv() odbiera surowe bajty, a nie string C. Ono nie dopisuje '\0'.
-    // po dopisaniu ręcznie możesz potem użyć funkcji stringowych, np.:
-    body[received] = '\0';
+    // httpd_req_recv() reads raw bytes, so terminate the buffer before using string functions.
+    body[received_total] = '\0';
 
     char *end = NULL;
     long value = strtol(body, &end, 10);

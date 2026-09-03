@@ -102,7 +102,8 @@ Current modules:
     - right-click erase
     - clear grid
     - save/load in browser local storage
-    - export/import JSON file
+    - export/import `led-image` JSON file
+    - import PNG/JPEG/WebP/GIF and convert to 16x16 pixels
     - brightness slider using `POST /brightness`
     - `POST /frame`
     - `POST /demo`
@@ -334,7 +335,8 @@ Current behavior:
 - User can draw a 16x16 frame in the browser.
 - The page sends raw RGB888 bytes to `POST /frame`.
 - The editor supports save/load in browser local storage.
-- The editor supports export/import as JSON files.
+- The editor supports export/import as `led-image` JSON files.
+- The editor imports common image files and converts them to the current 16x16 grid.
 - A brightness slider sends the selected value to `POST /brightness`.
 - Health check, frame upload, demo trigger, and brightness control have been verified on device.
 - The editor is local only; it is not hosted by ESP32 yet.
@@ -371,10 +373,9 @@ LED matrix
 Suggested next steps:
 
 1. Add minimal status/error logging around HTTP frame uploads.
-2. Decide the first image transfer format beyond raw RGB888.
-3. Start designing text rendering as animation-oriented drawing.
-4. Consider extracting demo/application mode handling out of `main.c` when it starts growing.
-5. Decide the next product direction:
+2. Start designing text rendering as animation-oriented drawing.
+3. Consider extracting demo/application mode handling out of `main.c` when it starts growing.
+4. Decide the next product direction:
    - keep using local HTML during development
    - or host the editor directly from ESP32
 
@@ -401,8 +402,8 @@ These are known improvement areas. They are not all blockers for the next small 
 - `tools/pixel-editor.html` is not hosted by ESP32 yet.
 - Local editor save/load currently uses one browser local storage slot only. Multiple named drawings are future work.
 - Current `/frame` endpoint accepts only full 16x16 frames. Partial updates or single-pixel control are future work.
-- There is no agreed higher-level image upload format yet. Raw RGB888 is good for MVP, but stored/uploaded images may need metadata such as width, height, name, format, and encoding.
-- Photo/image conversion is not implemented yet. Future tooling should resize, crop, quantize, and brightness-correct images for the target matrix resolution.
+- `led-image` is currently an editor/document format, not a device render format. Keep `/frame` raw RGB888 for live rendering.
+- Photo/image conversion currently supports browser-side fit/crop into the 16x16 grid. More advanced controls such as gamma correction, contrast, dithering, and palette reduction are future work.
 - Text rendering is not implemented yet. It will likely share animation infrastructure because useful text display needs scrolling or timed frame updates.
 - `sdkconfig` may contain Wi-Fi credentials. It is ignored by git now; keep it that way unless credentials are removed.
 
@@ -437,7 +438,8 @@ Preferred order:
 
 Potential next editor features:
 
-- Export/import JSON.
+- Export/import `led-image` JSON. DONE
+- Import PNG/JPEG/WebP/GIF and convert to grid pixels. DONE
 - Export C array for built-in firmware images.
 - Save recent IP address in browser local storage.
 - Preview sent payload brightness separately from editing colors.
@@ -623,6 +625,35 @@ Future tool:
 
 Raw RGB888 works well for the first live frame endpoint, but it is not necessarily the best long-term format for user-uploaded images.
 
+Current format split:
+
+- Render format:
+  - `POST /frame`
+  - raw RGB888 bytes
+  - length = `width * height * 3`
+  - optimized for direct framebuffer rendering
+- Document format:
+  - `led-image` JSON
+  - used by the local editor for save/load/export/import
+  - carries metadata and editable pixel data
+
+Current `led-image` v1 document:
+
+```json
+{
+  "format": "led-image",
+  "version": 1,
+  "type": "image",
+  "width": 16,
+  "height": 16,
+  "brightness": 35,
+  "pixels": [
+    [0, 0, 0],
+    [255, 0, 0]
+  ]
+}
+```
+
 Possible input formats:
 
 - Raw RGB888 frame:
@@ -638,7 +669,7 @@ Possible input formats:
   - likely better converted in browser or desktop tooling first
   - decoding on ESP32 is possible but more complexity than needed now
 
-Preferred short-term direction:
+Current short-term direction:
 
 ```text
 PNG/JPEG in browser or local tool
@@ -652,6 +683,16 @@ convert to RGB888
         v
 POST /frame or save/export
 ```
+
+Current local editor behavior:
+
+- Imports PNG/JPEG/WebP/GIF through a browser file input.
+- Uses an offscreen canvas to convert the image to 16x16.
+- Supports:
+  - crop mode, good for filling the whole matrix
+  - fit mode, good for preserving the full image with black margins
+- Writes converted pixels into the editable grid.
+- Does not automatically send the converted image; the user still clicks `SEND`.
 
 Useful conversion options:
 

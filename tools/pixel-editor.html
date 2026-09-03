@@ -82,6 +82,18 @@
       accent-color: #0f6bff;
     }
 
+    select {
+      width: 92px;
+      height: 38px;
+      padding: 0 8px;
+      border: 1px solid #444;
+      border-radius: 6px;
+      background: #111;
+      color: #fff;
+      font: inherit;
+      cursor: pointer;
+    }
+
     .range-label {
       min-width: 150px;
     }
@@ -225,9 +237,18 @@
       <button id="loadButton" type="button">LOAD</button>
       <button id="exportButton" type="button">EXPORT</button>
       <button id="importButton" type="button">IMPORT</button>
+      <label>
+        Image mode
+        <select id="imageModeInput">
+          <option value="crop" selected>CROP</option>
+          <option value="fit">FIT</option>
+        </select>
+      </label>
+      <button id="imageImportButton" type="button">IMAGE</button>
       <button id="demoButton" type="button">DEMO</button>
       <button id="sendButton" class="primary" type="button">SEND</button>
-      <input id="importInput" class="hidden" type="file" accept="application/json,.json">
+      <input id="importInput" class="hidden" type="file" accept=".json">
+      <input id="imageInput" class="hidden" type="file" accept="image/*">
     </section>
 
     <div id="status" class="status">Ready.</div>
@@ -241,6 +262,7 @@
         <div><strong>Brightness</strong>: sends value to <code>/brightness</code></div>
         <div><strong>Save/Load</strong>: stores one drawing in this browser</div>
         <div><strong>Export/Import</strong>: uses a JSON drawing file</div>
+        <div><strong>Image</strong>: converts PNG/JPEG/WebP/GIF to 16x16 pixels</div>
         <div><strong>Send</strong>: POST raw RGB888 frame to <code>/frame</code></div>
         <div><strong>Demo</strong>: POST to <code>/demo</code></div>
       </aside>
@@ -263,11 +285,17 @@
     const exportButton = document.getElementById("exportButton");
     const importButton = document.getElementById("importButton");
     const importInput = document.getElementById("importInput");
+    const imageModeInput = document.getElementById("imageModeInput");
+    const imageImportButton = document.getElementById("imageImportButton");
+    const imageInput = document.getElementById("imageInput");
     const demoButton = document.getElementById("demoButton");
     const sendButton = document.getElementById("sendButton");
     const statusEl = document.getElementById("status");
     const gridEl = document.getElementById("grid");
 
+    const DOCUMENT_FORMAT = "led-image";
+    const DOCUMENT_VERSION = 1;
+    const DOCUMENT_TYPE = "image";
     const STORAGE_KEY = "led-matrix-pixel-editor-frame";
     const pixels = Array.from({ length: MATRIX_WIDTH * MATRIX_HEIGHT }, () => ({ r: 0, g: 0, b: 0 }));
     let isPointerDown = false;
@@ -339,7 +367,9 @@
 
     function createDrawingSnapshot() {
       return {
-        version: 1,
+        format: DOCUMENT_FORMAT,
+        version: DOCUMENT_VERSION,
+        type: DOCUMENT_TYPE,
         width: MATRIX_WIDTH,
         height: MATRIX_HEIGHT,
         brightness: Number(brightnessInput.value),
@@ -349,6 +379,22 @@
 
     function parseDrawingSnapshot(value) {
       const snapshot = typeof value === "string" ? JSON.parse(value) : value;
+
+      if (!snapshot || typeof snapshot !== "object") {
+        throw new Error("Invalid drawing document.");
+      }
+
+      if (snapshot.format !== undefined && snapshot.format !== DOCUMENT_FORMAT) {
+        throw new Error(`Expected ${DOCUMENT_FORMAT} format.`);
+      }
+
+      if (snapshot.version !== DOCUMENT_VERSION) {
+        throw new Error(`Expected document version ${DOCUMENT_VERSION}.`);
+      }
+
+      if (snapshot.type !== undefined && snapshot.type !== DOCUMENT_TYPE) {
+        throw new Error(`Expected ${DOCUMENT_TYPE} document type.`);
+      }
 
       if (!snapshot || snapshot.width !== MATRIX_WIDTH || snapshot.height !== MATRIX_HEIGHT) {
         throw new Error(`Expected ${MATRIX_WIDTH}x${MATRIX_HEIGHT} drawing.`);
@@ -398,7 +444,7 @@
       setStatus("Drawing saved in this browser.", "ok");
     }
 
-    function loadDrawing() {
+    async function loadDrawing() {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (!saved) {
         setStatus("No saved drawing found.", "error");
@@ -407,7 +453,12 @@
 
       try {
         applyDrawingSnapshot(parseDrawingSnapshot(saved));
-        setStatus("Drawing loaded from this browser.", "ok");
+        const brightnessSent = await sendBrightness();
+        if (brightnessSent) {
+          setStatus("Drawing loaded from this browser.", "ok");
+        } else {
+          setStatus("Drawing loaded, but brightness was not sent.", "error");
+        }
       } catch (error) {
         setStatus(`Load failed: ${error.message}`, "error");
       }
@@ -421,7 +472,7 @@
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 
       link.href = url;
-      link.download = `led-matrix-16x16-${timestamp}.json`;
+      link.download = `led-image-16x16-${timestamp}.json`;
       link.click();
       URL.revokeObjectURL(url);
       setStatus("Drawing exported as JSON.", "ok");
@@ -435,11 +486,106 @@
       try {
         const content = await file.text();
         applyDrawingSnapshot(parseDrawingSnapshot(content));
-        setStatus(`Imported ${file.name}.`, "ok");
+        const brightnessSent = await sendBrightness();
+        if (brightnessSent) {
+          setStatus(`Imported ${file.name}.`, "ok");
+        } else {
+          setStatus(`Imported ${file.name}, but brightness was not sent.`, "error");
+        }
       } catch (error) {
         setStatus(`Import failed: ${error.message}`, "error");
       } finally {
         importInput.value = "";
+      }
+    }
+
+    function loadImageFile(file) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const image = new Image();
+
+        image.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(image);
+        };
+
+        image.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error("Failed to load image file."));
+        };
+
+        image.src = url;
+      });
+    }
+
+    function getImageDrawRect(image, mode) {
+      const imageRatio = image.naturalWidth / image.naturalHeight;
+      const canvasRatio = MATRIX_WIDTH / MATRIX_HEIGHT;
+
+      if (mode === "fit") {
+        if (imageRatio > canvasRatio) {
+          const width = MATRIX_WIDTH;
+          const height = MATRIX_WIDTH / imageRatio;
+          return { dx: 0, dy: (MATRIX_HEIGHT - height) / 2, width, height };
+        }
+
+        const height = MATRIX_HEIGHT;
+        const width = MATRIX_HEIGHT * imageRatio;
+        return { dx: (MATRIX_WIDTH - width) / 2, dy: 0, width, height };
+      }
+
+      if (imageRatio > canvasRatio) {
+        const height = MATRIX_HEIGHT;
+        const width = MATRIX_HEIGHT * imageRatio;
+        return { dx: (MATRIX_WIDTH - width) / 2, dy: 0, width, height };
+      }
+
+      const width = MATRIX_WIDTH;
+      const height = MATRIX_WIDTH / imageRatio;
+      return { dx: 0, dy: (MATRIX_HEIGHT - height) / 2, width, height };
+    }
+
+    function convertImageToPixels(image) {
+      const canvas = document.createElement("canvas");
+      canvas.width = MATRIX_WIDTH;
+      canvas.height = MATRIX_HEIGHT;
+
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      const drawRect = getImageDrawRect(image, imageModeInput.value);
+
+      context.fillStyle = "rgb(0, 0, 0)";
+      context.fillRect(0, 0, MATRIX_WIDTH, MATRIX_HEIGHT);
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
+      context.drawImage(image, drawRect.dx, drawRect.dy, drawRect.width, drawRect.height);
+
+      const imageData = context.getImageData(0, 0, MATRIX_WIDTH, MATRIX_HEIGHT).data;
+      const nextPixels = [];
+
+      for (let i = 0; i < imageData.length; i += 4) {
+        nextPixels.push({
+          r: imageData[i],
+          g: imageData[i + 1],
+          b: imageData[i + 2],
+        });
+      }
+
+      applyPixels(nextPixels);
+    }
+
+    async function importImage(file) {
+      if (!file) {
+        return;
+      }
+
+      try {
+        const image = await loadImageFile(file);
+        convertImageToPixels(image);
+        setStatus(`Converted ${file.name} to ${MATRIX_WIDTH}x${MATRIX_HEIGHT}.`, "ok");
+      } catch (error) {
+        setStatus(`Image import failed: ${error.message}`, "error");
+      } finally {
+        imageInput.value = "";
       }
     }
 
@@ -488,11 +634,14 @@
         const text = await response.text();
         if (response.ok) {
           setStatus(`Brightness set to ${brightnessInput.value}%: ${text || "OK"}`, "ok");
+          return true;
         } else {
           setStatus(`Brightness failed: ${response.status} ${text}`, "error");
+          return false;
         }
       } catch (error) {
         setStatus(`Brightness request failed: ${error.message}`, "error");
+        return false;
       }
     }
 
@@ -555,6 +704,8 @@
     exportButton.addEventListener("click", exportDrawing);
     importButton.addEventListener("click", () => importInput.click());
     importInput.addEventListener("change", () => importDrawing(importInput.files[0]));
+    imageImportButton.addEventListener("click", () => imageInput.click());
+    imageInput.addEventListener("change", () => importImage(imageInput.files[0]));
     sendButton.addEventListener("click", sendFrame);
     demoButton.addEventListener("click", enableDemo);
     brightnessInput.addEventListener("input", updateBrightnessValue);
