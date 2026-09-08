@@ -3,6 +3,7 @@
 #include "framebuffer.h"
 #include "wifi_app.h"
 #include "http_server_app.h"
+#include "text_display_engine.h"
 #include <stdbool.h>
 
 #include "freertos/FreeRTOS.h"
@@ -12,7 +13,7 @@
 static const char *TAG = "MAIN";
 static rgb_t framebuffer_pixels[16 * 16];
 static framebuffer_t fb;
-static bool s_demo_enabled = true;
+static bool s_demo_enabled = false;
 
 static esp_err_t display_image(const led_matrix_image_t *image) {
     ESP_RETURN_ON_ERROR(framebuffer_clear(&fb), TAG, "Failed to clear framebuffer");
@@ -89,6 +90,8 @@ void app_main(void)
     ESP_ERROR_CHECK(image_store_get("smile", &smile_image));
     ESP_ERROR_CHECK(image_store_get("lightning", &lightning_image));
     ESP_ERROR_CHECK(image_store_get("heart", &heart_image));
+
+    ESP_ERROR_CHECK(display_text(&fb));
 
     while (1) {
         if (s_demo_enabled) {

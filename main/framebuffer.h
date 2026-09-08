@@ -37,3 +37,4 @@ esp_err_t framebuffer_draw_rgb888(framebuffer_t *fb,
                                     const uint8_t *data,
                                     size_t data_len
 );
+esp_err_t framebuffer_draw_viewport(framebuffer_t *fb, const led_matrix_image_t *image);

@@ -112,3 +112,25 @@ esp_err_t framebuffer_draw_rgb888(framebuffer_t *fb, uint16_t width, uint16_t he
     }
     return ESP_OK;
 }
+
+esp_err_t framebuffer_draw_viewport(framebuffer_t *fb, const led_matrix_image_t *image) {
+   if (fb == NULL || fb->pixels == NULL || image == NULL || image->pixels == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    if (image->width > fb->width || image->height > fb->height) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+     for (int y = 0; y < image->height; y++) {
+        for (int x = 0; x < image->width; x++) {
+
+            rgb_t pixel_color = image->pixels[y * image->width + x];
+            esp_err_t err = framebuffer_set_pixel(fb, x, y, pixel_color);
+            if (err != ESP_OK) {
+                return err;
+            }
+        }
+    }
+    return ESP_OK;
+}
