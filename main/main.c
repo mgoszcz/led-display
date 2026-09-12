@@ -21,7 +21,7 @@ typedef enum {
 static const char *TAG = "MAIN";
 static rgb_t framebuffer_pixels[16 * 16];
 static framebuffer_t fb;
-static display_mode_t s_display_mode = DISPLAY_MODE_TEXT;
+static display_mode_t s_display_mode = DISPLAY_MODE_DEMO;
 
 static esp_err_t set_display_mode(display_mode_t mode) {
     if (s_display_mode == mode) {
@@ -36,10 +36,6 @@ static esp_err_t set_display_mode(display_mode_t mode) {
     }
 
     s_display_mode = mode;
-    if (s_display_mode == DISPLAY_MODE_TEXT) {
-        ESP_LOGI(TAG, "Starting text display task");
-        ESP_RETURN_ON_ERROR(text_display_start(&fb), TAG, "Failed to start text display task");
-    }
     return ESP_OK;
 }
 
@@ -82,6 +78,17 @@ static esp_err_t handle_brightness(int brightness)
     return ESP_OK;
 }
 
+static esp_err_t handle_text(const text_display_config_t *config)
+{
+    if (text_display_is_running()) {
+        ESP_LOGW(TAG, "Text display task is already running. Stopping it first.");
+        ESP_RETURN_ON_ERROR(text_display_stop(), TAG, "Failed to stop existing text display task");
+    }
+    ESP_RETURN_ON_ERROR(set_display_mode(DISPLAY_MODE_TEXT), TAG, "Failed to set display mode");
+    ESP_RETURN_ON_ERROR(text_display_start(&fb, config), TAG, "Failed to start text display");
+    return ESP_OK;
+}
+
 static void demo_delay(void)
 {
     for (int i = 0; i < 50; i++) {
@@ -111,17 +118,13 @@ void app_main(void)
     
     ESP_ERROR_CHECK(led_matrix_init(&config));
     ESP_ERROR_CHECK(wifi_app_start());
-    ESP_ERROR_CHECK(http_server_app_start(handle_frame_upload, handle_demo_enable, handle_brightness));
+    ESP_ERROR_CHECK(http_server_app_start(handle_frame_upload, handle_demo_enable, handle_brightness, handle_text));
 
     ESP_ERROR_CHECK(led_matrix_clear());
     
     ESP_ERROR_CHECK(image_store_get("smile", &smile_image));
     ESP_ERROR_CHECK(image_store_get("lightning", &lightning_image));
     ESP_ERROR_CHECK(image_store_get("heart", &heart_image));
-
-    if (s_display_mode == DISPLAY_MODE_TEXT) {
-        ESP_ERROR_CHECK(text_display_start(&fb));
-    }
 
     while (1) {
         if (s_display_mode == DISPLAY_MODE_DEMO) {

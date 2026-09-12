@@ -39,14 +39,36 @@
     }
 
     .toolbar {
-      display: flex;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 10px;
-      align-items: center;
       padding: 14px;
       border: 1px solid #303030;
       background: #1d1d1d;
       border-radius: 8px;
+    }
+
+    .toolbar-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: end;
+      padding: 12px;
+      border: 1px solid #303030;
+      border-radius: 6px;
+      background: #181818;
+    }
+
+    .toolbar-group.wide {
+      grid-column: span 2;
+    }
+
+    .toolbar-title {
+      width: 100%;
+      margin: 0;
+      color: #f2f2f2;
+      font-size: 13px;
+      font-weight: 700;
     }
 
     label {
@@ -56,7 +78,8 @@
       color: #bdbdbd;
     }
 
-    input[type="text"] {
+    input[type="text"],
+    input[type="number"] {
       width: 220px;
       height: 38px;
       padding: 0 10px;
@@ -65,6 +88,10 @@
       background: #111;
       color: #fff;
       font: inherit;
+    }
+
+    input[type="number"] {
+      width: 96px;
     }
 
     input[type="color"] {
@@ -126,6 +153,15 @@
 
     button.primary:hover {
       background: #287cff;
+    }
+
+    button.text-send {
+      background: #7b3ff2;
+      border-color: #9364ff;
+    }
+
+    button.text-send:hover {
+      background: #8b56ff;
     }
 
     .hidden {
@@ -204,6 +240,10 @@
         grid-template-columns: 1fr;
       }
 
+      .toolbar-group.wide {
+        grid-column: span 1;
+      }
+
       input[type="text"] {
         width: 100%;
       }
@@ -215,38 +255,59 @@
     <h1>LED Matrix Pixel Editor</h1>
 
     <section class="toolbar" aria-label="Connection and drawing controls">
-      <label>
-        ESP32 IP
-        <input id="ipInput" type="text" placeholder="192.168.1.123">
-      </label>
+      <div class="toolbar-group">
+        <p class="toolbar-title">Connection</p>
+        <label>
+          ESP32 IP
+          <input id="ipInput" type="text" placeholder="192.168.1.123">
+        </label>
+        <button id="checkButton" type="button">CHECK</button>
+      </div>
 
-      <button id="checkButton" type="button">CHECK</button>
+      <div class="toolbar-group wide">
+        <p class="toolbar-title">Text display</p>
+        <label>
+          Text
+          <input id="textInput" type="text" maxlength="64" placeholder="Maria">
+        </label>
+        <label>
+          Speed ms
+          <input id="textSpeedInput" type="number" min="10" max="5000" step="10" value="100">
+        </label>
+        <button id="textButton" class="text-send" type="button">SEND TEXT</button>
+      </div>
 
-      <label>
-        Color
-        <input id="colorInput" type="color" value="#2020ff">
-      </label>
+      <div class="toolbar-group wide">
+        <p class="toolbar-title">Pixel frame</p>
+        <label>
+          Color
+          <input id="colorInput" type="color" value="#2020ff">
+        </label>
+        <button id="clearButton" type="button">CLEAR</button>
+        <button id="saveButton" type="button">SAVE</button>
+        <button id="loadButton" type="button">LOAD</button>
+        <button id="exportButton" type="button">EXPORT</button>
+        <button id="importButton" type="button">IMPORT</button>
+        <label>
+          Image mode
+          <select id="imageModeInput">
+            <option value="crop" selected>CROP</option>
+            <option value="fit">FIT</option>
+          </select>
+        </label>
+        <button id="imageImportButton" type="button">IMAGE</button>
+        <button id="sendButton" class="primary" type="button">SEND FRAME</button>
+      </div>
 
-      <label class="range-label">
-        Brightness <span id="brightnessValue" class="range-value">35%</span>
-        <input id="brightnessInput" type="range" min="1" max="100" value="35">
-      </label>
+      <div class="toolbar-group">
+        <p class="toolbar-title">Device</p>
+        <label class="range-label">
+          Brightness <span id="brightnessValue" class="range-value">35%</span>
+          <input id="brightnessInput" type="range" min="1" max="100" value="35">
+        </label>
+        <button id="demoButton" type="button">DEMO</button>
+      </div>
 
-      <button id="clearButton" type="button">CLEAR</button>
-      <button id="saveButton" type="button">SAVE</button>
-      <button id="loadButton" type="button">LOAD</button>
-      <button id="exportButton" type="button">EXPORT</button>
-      <button id="importButton" type="button">IMPORT</button>
-      <label>
-        Image mode
-        <select id="imageModeInput">
-          <option value="crop" selected>CROP</option>
-          <option value="fit">FIT</option>
-        </select>
-      </label>
-      <button id="imageImportButton" type="button">IMAGE</button>
-      <button id="demoButton" type="button">DEMO</button>
-      <button id="sendButton" class="primary" type="button">SEND</button>
       <input id="importInput" class="hidden" type="file" accept=".json">
       <input id="imageInput" class="hidden" type="file" accept="image/*">
     </section>
@@ -263,6 +324,7 @@
         <div><strong>Save/Load</strong>: stores one drawing in this browser</div>
         <div><strong>Export/Import</strong>: uses a JSON drawing file</div>
         <div><strong>Image</strong>: converts PNG/JPEG/WebP/GIF to 16x16 pixels</div>
+        <div><strong>Text</strong>: POST JSON to <code>/text</code> using selected color</div>
         <div><strong>Send</strong>: POST raw RGB888 frame to <code>/frame</code></div>
         <div><strong>Demo</strong>: POST to <code>/demo</code></div>
       </aside>
@@ -277,6 +339,8 @@
     const ipInput = document.getElementById("ipInput");
     const checkButton = document.getElementById("checkButton");
     const colorInput = document.getElementById("colorInput");
+    const textInput = document.getElementById("textInput");
+    const textSpeedInput = document.getElementById("textSpeedInput");
     const brightnessInput = document.getElementById("brightnessInput");
     const brightnessValue = document.getElementById("brightnessValue");
     const clearButton = document.getElementById("clearButton");
@@ -289,6 +353,7 @@
     const imageImportButton = document.getElementById("imageImportButton");
     const imageInput = document.getElementById("imageInput");
     const demoButton = document.getElementById("demoButton");
+    const textButton = document.getElementById("textButton");
     const sendButton = document.getElementById("sendButton");
     const statusEl = document.getElementById("status");
     const gridEl = document.getElementById("grid");
@@ -660,6 +725,50 @@
       }
     }
 
+    function getTextSpeedMs() {
+      const speed = Number(textSpeedInput.value);
+
+      if (!Number.isInteger(speed) || speed < 10 || speed > 5000) {
+        throw new Error("Text speed must be an integer from 10 to 5000 ms.");
+      }
+
+      return speed;
+    }
+
+    async function sendText() {
+      const text = textInput.value.trim();
+
+      if (!text) {
+        setStatus("Enter text before sending.", "error");
+        return;
+      }
+
+      try {
+        const payload = {
+          text,
+          color: hexToRgb(colorInput.value),
+          speedMs: getTextSpeedMs(),
+        };
+
+        const response = await fetch(`${getBaseUrl()}/text`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        const responseText = await response.text();
+        if (response.ok) {
+          setStatus(`Text sent: ${responseText || "OK"}`, "ok");
+        } else {
+          setStatus(`Text failed: ${response.status} ${responseText}`, "error");
+        }
+      } catch (error) {
+        setStatus(`Text request failed: ${error.message}`, "error");
+      }
+    }
+
     function createGrid() {
       for (let i = 0; i < MATRIX_WIDTH * MATRIX_HEIGHT; i++) {
         const cell = document.createElement("button");
@@ -708,6 +817,12 @@
     imageInput.addEventListener("change", () => importImage(imageInput.files[0]));
     sendButton.addEventListener("click", sendFrame);
     demoButton.addEventListener("click", enableDemo);
+    textButton.addEventListener("click", sendText);
+    textInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        sendText();
+      }
+    });
     brightnessInput.addEventListener("input", updateBrightnessValue);
     brightnessInput.addEventListener("change", sendBrightness);
 

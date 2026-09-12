@@ -37,6 +37,18 @@ Current modules:
     - `rgb_t`
     - `led_matrix_image_t`
 
+- `display_types.h`
+  - Shared display-level request/config types.
+  - Keeps cross-module payload structs outside individual infrastructure modules.
+  - Current use:
+    - text display configuration for HTTP `/text` and text rendering.
+
+- `font_5x7.h` / `font_5x7.c`
+  - 5x7 bitmap font module.
+  - Stores glyphs as compact bitmasks.
+  - Provides glyph lookup and per-pixel access helpers.
+  - Should not know about framebuffer, LED matrix, scrolling, HTTP, or application modes.
+
 - `led_matrix.h` / `led_matrix.c`
   - Hardware-facing LED matrix module.
   - Owns LED strip initialization and physical XY-to-index mapping.
@@ -90,8 +102,21 @@ Current modules:
     - `GET /health` -> `OK`
     - `POST /frame` -> accepts one full raw RGB888 frame
     - `POST /demo` -> enables demo mode again
+    - `POST /brightness` -> sets brightness percent
+    - `POST /text` -> starts scrolling text from JSON config
   - Keeps server handle as static module state.
   - Uses callbacks passed from `main.c` so it does not directly know framebuffer or LED matrix internals.
+
+- `text_display_engine.h` / `text_display_engine.c`
+  - Text rendering / scrolling module.
+  - Builds a wider virtual text image from the 5x7 font.
+  - Uses an ESP timer and FreeRTOS task to scroll a 16x16 viewport.
+  - Accepts text config:
+    - text
+    - color
+    - speed
+  - Owns its task/timer lifecycle through start/stop functions.
+  - Currently renders directly through framebuffer and LED matrix; this is acceptable for MVP but should later move behind a display controller.
 
 - `tools/pixel-editor.html`
   - Local browser-based 16x16 pixel editor.
@@ -107,6 +132,7 @@ Current modules:
     - brightness slider using `POST /brightness`
     - `POST /frame`
     - `POST /demo`
+    - text display using `POST /text` JSON
   - Verified with the ESP32 device in the current local workflow.
 
 - `main/Kconfig.projbuild`
@@ -123,6 +149,12 @@ Current modules:
   - Provides HTTP callbacks:
     - frame upload disables demo mode and renders uploaded frame
     - demo endpoint enables demo mode again
+    - brightness endpoint updates brightness and re-renders current framebuffer
+    - text endpoint starts/restarts scrolling text
+  - Currently owns simple display mode switching:
+    - demo
+    - frame
+    - text
 
 # Current Render Flow
 
@@ -325,6 +357,8 @@ Current endpoints:
 GET /health -> OK
 POST /frame -> raw RGB888 frame, exactly 768 bytes
 POST /demo -> enables startup demo again
+POST /brightness -> brightness percent
+POST /text -> JSON text config
 ```
 
 ## 7. First Interactive Pixel Editor - INITIAL VERSION DONE
@@ -339,43 +373,77 @@ Current behavior:
 - The editor imports common image files and converts them to the current 16x16 grid.
 - A brightness slider sends the selected value to `POST /brightness`.
 - Health check, frame upload, demo trigger, and brightness control have been verified on device.
+- Text display control sends JSON to `POST /text`.
+- The editor separates controls into connection, text display, pixel frame, and device sections.
 - The editor is local only; it is not hosted by ESP32 yet.
 
-# Current Near-Term Architecture
+## 8. Scrolling Text - INITIAL VERSION DONE
 
-For now, keep the application simple:
+Current behavior:
 
-```c
-while (1) {
-    framebuffer_clear(&fb);
-    framebuffer_draw_image(&fb, image, 0, 0);
-    led_matrix_render_framebuffer(&fb);
-    vTaskDelay(...);
+- Device has a 5x7 bitmap font.
+- `/text` accepts JSON:
+
+```json
+{
+  "text": "Maria",
+  "color": { "r": 255, "g": 0, "b": 0 },
+  "speedMs": 100
 }
 ```
 
-Avoid adding FreeRTOS tasks until there is a real need for independent input/render/application logic.
+- Text engine copies request text into its own static buffer.
+- Text engine builds a wider virtual image with left/right padding.
+- A timer notifies a FreeRTOS task.
+- The task copies a moving 16x16 viewport into the framebuffer and renders it.
+- New `/text` requests restart the previous text display.
+- Leaving text mode stops the text task/timer.
+
+Current limitations:
+
+- ASCII-oriented 5x7 font only.
+- Text length is capped.
+- Color and speed are per text run, not dynamic during a run.
+- Text engine currently renders directly. Later this should go through a display controller or render owner.
+
+# Current Near-Term Architecture
+
+The application is transitioning from a simple loop to mode-based rendering:
+
+```text
+HTTP /frame       -> DISPLAY_MODE_FRAME -> framebuffer + render
+HTTP /demo        -> DISPLAY_MODE_DEMO  -> main demo loop renders images
+HTTP /text        -> DISPLAY_MODE_TEXT  -> text task/timer renders scrolling text
+HTTP /brightness  -> update brightness  -> re-render current framebuffer
+```
+
+For MVP, mode switching remains in `main.c`.
+The next architectural cleanup should be a small display controller or render owner so only one task owns framebuffer/render operations.
 
 # Next Milestone
 
-Stabilize the first interactive drawing workflow:
+Stabilize mode-based rendering and browser control:
 
 ```text
-Browser pixel editor
+Browser pixel editor / text controls
         |
         v
-ESP32 /frame
+ESP32 HTTP endpoints
         |
         v
-LED matrix
+framebuffer / text engine
+        |
+        v
+LED matrix render
 ```
 
 Suggested next steps:
 
-1. Add minimal status/error logging around HTTP frame uploads.
-2. Start designing text rendering as animation-oriented drawing.
-3. Consider extracting demo/application mode handling out of `main.c` when it starts growing.
-4. Decide the next product direction:
+1. Add/verify CORS `OPTIONS` handling for JSON endpoints such as `/text`.
+2. Test `/text`, `/frame`, `/demo`, and `/brightness` mode switching repeatedly on hardware.
+3. Add a minimal synchronization strategy around framebuffer/render operations, or start extracting a display controller.
+4. Consider extracting demo/application mode handling out of `main.c`.
+5. Decide the next product direction:
    - keep using local HTML during development
    - or host the editor directly from ESP32
 
@@ -390,13 +458,19 @@ These are known improvement areas. They are not all blockers for the next small 
 - `wifi_app` has no stop/deinit function yet. Add only when lifecycle requires it.
 - `http_server_app` has no stop function yet. Add `http_server_app_stop()` when needed.
 - HTTP server CORS support is minimal. Current endpoints work with simple browser requests, but future custom headers may require `OPTIONS` handling.
+- JSON endpoints such as `/text` can trigger browser preflight requests because of `Content-Type: application/json`. Add proper `OPTIONS` handling and CORS headers for JSON endpoints.
 - `led_matrix` should eventually validate that it has been initialized before public operations.
 - Consider returning `esp_err_t` from `led_matrix_set_brightness()`.
 - Keep public API argument validation consistent across all modules.
 - Decide later whether off-screen drawing should fail or clip. Current framebuffer image drawing requires the image to fit.
 - `framebuffer_draw_rgb888()` currently supports only full-frame payloads. That is intentional for the first HTTP MVP.
-- Demo/application mode is currently simple shared state in `main.c`. This is acceptable for MVP, but should become a small app-state module or event-driven flow later.
-- `s_demo_enabled` is touched by HTTP server callbacks and the main loop. For now it works as a simple MVP, but later introduce a safer app-state/event queue approach.
+- Demo/application mode is currently simple shared state in `main.c`. This is acceptable for MVP, but should become a small app-state module, display controller, or event-driven flow later.
+- Rendering can currently be initiated by more than one context:
+  - main demo loop
+  - HTTP callbacks
+  - text display task
+  - brightness callback re-render
+  This can potentially race around shared framebuffer/LED rendering. A rare ESP hang/reset was observed once while changing brightness during scrolling text. It did not reproduce immediately, but the likely future fix is a mutex around framebuffer/render operations or, better, a single display/render owner task.
 - Decide whether `led_matrix_set_brightness()` should store brightness as percent or raw 0-255 internally. Current API direction is percent from HTTP/UI.
 - Automatic brightness based on ambient light is a future hardware/software feature, likely using a photoresistor or light sensor.
 - `tools/pixel-editor.html` is not hosted by ESP32 yet.
@@ -404,7 +478,7 @@ These are known improvement areas. They are not all blockers for the next small 
 - Current `/frame` endpoint accepts only full 16x16 frames. Partial updates or single-pixel control are future work.
 - `led-image` is currently an editor/document format, not a device render format. Keep `/frame` raw RGB888 for live rendering.
 - Photo/image conversion currently supports browser-side fit/crop into the 16x16 grid. More advanced controls such as gamma correction, contrast, dithering, and palette reduction are future work.
-- Text rendering is not implemented yet. It will likely share animation infrastructure because useful text display needs scrolling or timed frame updates.
+- Text rendering exists as an MVP, but it currently owns its own timer/task and renders directly. Later it should feed frames/events into a display controller.
 - `sdkconfig` may contain Wi-Fi credentials. It is ignored by git now; keep it that way unless credentials are removed.
 
 # Future Roadmap
@@ -440,6 +514,7 @@ Potential next editor features:
 
 - Export/import `led-image` JSON. DONE
 - Import PNG/JPEG/WebP/GIF and convert to grid pixels. DONE
+- Send scrolling text with color and speed. DONE
 - Export C array for built-in firmware images.
 - Save recent IP address in browser local storage.
 - Preview sent payload brightness separately from editing colors.
@@ -584,21 +659,67 @@ Initial animation ideas:
 
 Text should be treated as a drawing/animation feature, not as a low-level LED matrix feature.
 
-Likely building blocks:
+Current building blocks:
 
-- Small bitmap font, for example 5x7 or 6x8.
-- Function that draws one glyph into the framebuffer.
-- Function that draws a string at an `x, y` position.
-- Scrolling text implemented by moving the string position over time.
+- 5x7 bitmap font.
+- JSON `/text` endpoint.
+- `text_display_config_t` style config:
+  - text
+  - color
+  - speed
+- Text engine builds a virtual image and scrolls a 16x16 viewport over it.
 
-Possible future endpoint:
+Current endpoint:
 
 ```text
 POST /text
 body: text, color, speed, mode
 ```
 
-The endpoint should probably create an animation/state command rather than directly writing one static frame.
+Current short-term JSON shape:
+
+```json
+{
+  "text": "Hello",
+  "color": { "r": 255, "g": 0, "b": 0 },
+  "speedMs": 100
+}
+```
+
+Later, the endpoint should create an animation/state command rather than directly owning render timing.
+
+Future rich text direction:
+
+- Support multiple text segments with separate colors.
+- Useful for status displays such as stock/crypto quotes, where symbols and values may need different colors.
+- Prefer segment-level coloring over per-character coloring for the first richer format.
+
+Possible future payload:
+
+```json
+{
+  "segments": [
+    {
+      "text": "AAPL ",
+      "color": { "r": 255, "g": 255, "b": 255 }
+    },
+    {
+      "text": "+1.24%",
+      "color": { "r": 0, "g": 255, "b": 0 }
+    }
+  ],
+  "speedMs": 100
+}
+```
+
+Possible internal direction:
+
+```c
+typedef struct {
+    char text[TEXT_SEGMENT_MAX_CHARS + 1];
+    rgb_t color;
+} text_segment_t;
+```
 
 ## Image Creation Workflow
 
