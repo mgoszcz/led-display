@@ -4,6 +4,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_check.h"
+#include <stdbool.h>
 
 #define RED ((rgb_t){255, 0, 0})
 #define OFF ((rgb_t){0, 0, 0})
@@ -24,8 +26,9 @@ static rgb_t s_text_image[TEXT_IMAGE_HEIGHT][TEXT_IMAGE_WIDTH];
 static TaskHandle_t s_task_handle = NULL;
 static esp_timer_handle_t s_timer;
 static uint16_t s_scroll_x = 0;
+static bool s_stop_requested = false;
 
-const rgb_t letter[7][5] = {
+static const rgb_t letter[7][5] = {
     {OFF, RED, RED, RED, OFF},
     {RED, OFF, OFF, OFF, RED},
     {RED, OFF, OFF, OFF, OFF},
@@ -59,23 +62,31 @@ static void timer_callback(void *arg)
 
 }
 
-void timer_init() {
+static esp_err_t timer_init() {
+    if (s_timer != NULL) {
+        return ESP_OK;
+    }
     const esp_timer_create_args_t timer_args = {
         .callback = &timer_callback,
         .arg = NULL,
         .dispatch_method = ESP_TIMER_TASK,
         .name = "text_timer"
     };
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(s_timer, 100000));
+    ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &s_timer), TAG, "Failed to create timer");
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_timer, 100000), TAG, "Failed to start timer");
+    return ESP_OK;
 }
 
 static void text_task(void *arg) {
     framebuffer_t *fb = (framebuffer_t *)arg;
+    build_text_image(s_text_image);
     while (1) {
         uint16_t length = TEXT_IMAGE_WIDTH;
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        build_text_image(s_text_image);
+
+        if (s_stop_requested) {
+            break;
+        }
 
         rgb_t pixels[TEXT_VIEWPORT_HEIGHT * TEXT_VIEWPORT_WIDTH];
 
@@ -96,7 +107,7 @@ static void text_task(void *arg) {
             .pixels = pixels
         };
 
-        esp_err_t err = framebuffer_draw_viewport(fb, &image_to_display);
+        esp_err_t err = framebuffer_draw_image(fb, &image_to_display, 0, 0);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to draw text viewport: %s", esp_err_to_name(err));
             vTaskDelete(NULL);
@@ -111,13 +122,41 @@ static void text_task(void *arg) {
         }
 
     }
+
+    s_task_handle = NULL;
+    vTaskDelete(NULL);
 }
 
-esp_err_t display_text(framebuffer_t *fb) {
-    xTaskCreate(text_task, "text_task", 4096, fb, 5, &s_task_handle);
-    timer_init();
-    
-    
+esp_err_t text_display_start(framebuffer_t *fb) {
+    if (s_task_handle != NULL) {
+        ESP_LOGW(TAG, "Text display task is already running");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (fb == NULL) {
+        ESP_LOGE(TAG, "Framebuffer is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+    BaseType_t task_created = xTaskCreate(text_task, "text_task", 4096, fb, 5, &s_task_handle);
+    if (task_created != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_RETURN_ON_ERROR(timer_init(), TAG, "Failed to initialize timer");
+    return ESP_OK;
+}
 
+esp_err_t text_display_stop() {
+    if (s_task_handle == NULL) {
+        ESP_LOGW(TAG, "Text display task is not running");
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_stop_requested = true;
+    xTaskNotifyGive(s_task_handle);
+    while (s_task_handle != NULL) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    s_stop_requested = false;
+    esp_timer_stop(s_timer);
+    esp_timer_delete(s_timer);
+    s_timer = NULL;
     return ESP_OK;
 }

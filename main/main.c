@@ -10,10 +10,38 @@
 #include "freertos/task.h"
 #include "esp_check.h"
 
+typedef enum {
+    DISPLAY_MODE_IDLE,
+    DISPLAY_MODE_DEMO,
+    DISPLAY_MODE_FRAME,
+    DISPLAY_MODE_TEXT,
+} display_mode_t;
+
+
 static const char *TAG = "MAIN";
 static rgb_t framebuffer_pixels[16 * 16];
 static framebuffer_t fb;
-static bool s_demo_enabled = false;
+static display_mode_t s_display_mode = DISPLAY_MODE_TEXT;
+
+static esp_err_t set_display_mode(display_mode_t mode) {
+    if (s_display_mode == mode) {
+        return ESP_OK;
+    }
+
+    display_mode_t previous_mode = s_display_mode;
+
+    if (previous_mode == DISPLAY_MODE_TEXT) {
+        ESP_LOGI(TAG, "Stopping text display task");
+        ESP_RETURN_ON_ERROR(text_display_stop(), TAG, "Failed to stop text display task");
+    }
+
+    s_display_mode = mode;
+    if (s_display_mode == DISPLAY_MODE_TEXT) {
+        ESP_LOGI(TAG, "Starting text display task");
+        ESP_RETURN_ON_ERROR(text_display_start(&fb), TAG, "Failed to start text display task");
+    }
+    return ESP_OK;
+}
 
 static esp_err_t display_image(const led_matrix_image_t *image) {
     ESP_RETURN_ON_ERROR(framebuffer_clear(&fb), TAG, "Failed to clear framebuffer");
@@ -24,7 +52,7 @@ static esp_err_t display_image(const led_matrix_image_t *image) {
 
 static esp_err_t handle_frame_upload(const uint8_t *data, size_t len)
 {
-    s_demo_enabled = false; // Disable demo mode when a frame is uploaded
+    ESP_RETURN_ON_ERROR(set_display_mode(DISPLAY_MODE_FRAME), TAG, "Failed to set display mode");
     ESP_RETURN_ON_ERROR(framebuffer_draw_rgb888(&fb, 16, 16, data, len), TAG, "Failed to draw RGB888 frame");
     ESP_RETURN_ON_ERROR(led_matrix_render_framebuffer(&fb), TAG, "Failed to render framebuffer");
 
@@ -33,7 +61,7 @@ static esp_err_t handle_frame_upload(const uint8_t *data, size_t len)
 
 static esp_err_t handle_demo_enable(void)
 {
-    s_demo_enabled = true; // Enable demo mode
+    ESP_RETURN_ON_ERROR(set_display_mode(DISPLAY_MODE_DEMO), TAG, "Failed to set display mode");
     return ESP_OK;
 }
 
@@ -57,7 +85,7 @@ static esp_err_t handle_brightness(int brightness)
 static void demo_delay(void)
 {
     for (int i = 0; i < 50; i++) {
-        if (!s_demo_enabled) {
+        if (s_display_mode != DISPLAY_MODE_DEMO) {
             return;
         }
 
@@ -91,27 +119,28 @@ void app_main(void)
     ESP_ERROR_CHECK(image_store_get("lightning", &lightning_image));
     ESP_ERROR_CHECK(image_store_get("heart", &heart_image));
 
-    ESP_ERROR_CHECK(display_text(&fb));
+    if (s_display_mode == DISPLAY_MODE_TEXT) {
+        ESP_ERROR_CHECK(text_display_start(&fb));
+    }
 
     while (1) {
-        if (s_demo_enabled) {
+        if (s_display_mode == DISPLAY_MODE_DEMO) {
             ESP_ERROR_CHECK(display_image(smile_image));
             demo_delay();
         }
 
-        if (s_demo_enabled) {
+        if (s_display_mode == DISPLAY_MODE_DEMO) {
             ESP_ERROR_CHECK(display_image(lightning_image));
             demo_delay();
         }
 
-        if (s_demo_enabled) {
+        if (s_display_mode == DISPLAY_MODE_DEMO) {
             ESP_ERROR_CHECK(display_image(heart_image));
             demo_delay();
         }
 
-        if (!s_demo_enabled) {
+        if (s_display_mode != DISPLAY_MODE_DEMO) {
             vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
 }
-//192.168.1.28
