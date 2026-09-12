@@ -422,7 +422,7 @@ The next architectural cleanup should be a small display controller or render ow
 
 # Next Milestone
 
-Stabilize mode-based rendering and browser control:
+Prepare the project for larger rectangular displays and stabilize rendering ownership before adding more animation features:
 
 ```text
 Browser pixel editor / text controls
@@ -439,11 +439,18 @@ LED matrix render
 
 Suggested next steps:
 
-1. Add/verify CORS `OPTIONS` handling for JSON endpoints such as `/text`.
-2. Test `/text`, `/frame`, `/demo`, and `/brightness` mode switching repeatedly on hardware.
-3. Add a minimal synchronization strategy around framebuffer/render operations, or start extracting a display controller.
-4. Consider extracting demo/application mode handling out of `main.c`.
-5. Decide the next product direction:
+1. Introduce display size constants/configuration instead of scattered hardcoded `16x16` assumptions.
+2. Prepare firmware and tooling for rectangular or square displays made from 16x16 panels:
+   - 16x16
+   - 32x16
+   - 16x32
+   - 32x32
+   - future rectangular combinations if they remain regular panel grids.
+3. Add/verify CORS `OPTIONS` handling for JSON endpoints such as `/text`.
+4. Test `/text`, `/frame`, `/demo`, and `/brightness` mode switching repeatedly on hardware.
+5. Add a minimal synchronization strategy around framebuffer/render operations, or start extracting a display controller.
+6. Consider extracting demo/application mode handling out of `main.c`.
+7. Decide the next product direction:
    - keep using local HTML during development
    - or host the editor directly from ESP32
 
@@ -464,6 +471,7 @@ These are known improvement areas. They are not all blockers for the next small 
 - Keep public API argument validation consistent across all modules.
 - Decide later whether off-screen drawing should fail or clip. Current framebuffer image drawing requires the image to fit.
 - `framebuffer_draw_rgb888()` currently supports only full-frame payloads. That is intentional for the first HTTP MVP.
+- Display dimensions are still partially hardcoded as 16x16 in firmware and tooling. This should be addressed before going deeper into animations or multi-panel support.
 - Demo/application mode is currently simple shared state in `main.c`. This is acceptable for MVP, but should become a small app-state module, display controller, or event-driven flow later.
 - Rendering can currently be initiated by more than one context:
   - main demo loop
@@ -482,6 +490,80 @@ These are known improvement areas. They are not all blockers for the next small 
 - `sdkconfig` may contain Wi-Fi credentials. It is ignored by git now; keep it that way unless credentials are removed.
 
 # Future Roadmap
+
+## Display Size And Multi-Panel Layout
+
+Near-term architectural priority:
+
+- Remove scattered hardcoded 16x16 assumptions.
+- Support displays as regular rectangular/square grids made from 16x16 panels.
+- Initial target configurations:
+  - 16x16: one panel
+  - 32x16: two panels side by side
+  - 16x32: two panels stacked vertically
+  - 32x32: four panels
+
+Important distinction:
+
+- Logical display size:
+  - what the application, framebuffer, text engine, HTTP endpoints, and editor see
+  - examples: 16x16, 32x16, 16x32, 32x32
+- Physical LED mapping:
+  - how logical `(x, y)` maps to the actual LED index in chained WS2812B strips
+  - depends on panel order, panel orientation, origin, and serpentine layout
+
+Suggested configuration direction:
+
+```c
+#define DISPLAY_WIDTH 16
+#define DISPLAY_HEIGHT 16
+#define DISPLAY_PIXEL_COUNT (DISPLAY_WIDTH * DISPLAY_HEIGHT)
+#define DISPLAY_FRAME_BYTES (DISPLAY_PIXEL_COUNT * 3)
+```
+
+Later, move from compile-time constants to a display config struct if needed:
+
+```c
+typedef struct {
+    uint16_t width;
+    uint16_t height;
+    uint16_t panel_width;
+    uint16_t panel_height;
+    uint8_t panels_x;
+    uint8_t panels_y;
+} display_config_t;
+```
+
+Expected affected areas:
+
+- `main.c`
+  - framebuffer pixel buffer size
+  - `led_matrix_config_t`
+- `http_server_app`
+  - `/frame` byte length
+  - request validation
+- `framebuffer`
+  - should mostly already be dimension-aware
+- `text_display_engine`
+  - viewport width/height should follow display size
+  - text padding should adapt to display width
+- `tools/pixel-editor.html`
+  - grid dimensions
+  - raw frame byte count
+  - image import conversion size
+  - save/export metadata
+- built-in images
+  - currently 16x16; larger displays may need scaling, centering, or separate assets
+
+Preferred order:
+
+1. Centralize display width/height for current 16x16.
+2. Replace hardcoded firmware constants with centralized size constants.
+3. Update local editor to use configurable width/height constants.
+4. Verify current 16x16 still works.
+5. Add/verify physical mapping for two-panel configurations.
+6. Test 32x16 and/or 16x32 on real hardware.
+7. Only then build more advanced animation features.
 
 ## Web Pixel Editor
 
