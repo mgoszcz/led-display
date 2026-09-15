@@ -34,6 +34,7 @@ static TaskHandle_t s_task_handle = NULL;
 static esp_timer_handle_t s_timer;
 static uint16_t s_scroll_x = 0;
 static bool s_stop_requested = false;
+static text_frame_renderer_t s_render_frame = NULL;
 
 static esp_err_t build_text_image(rgb_t image[TEXT_IMAGE_HEIGHT][TEXT_IMAGE_WIDTH_MAX]) {
     size_t length = strlen(s_text);
@@ -86,7 +87,6 @@ static esp_err_t timer_init() {
 }
 
 static void text_task(void *arg) {
-    framebuffer_t *fb = (framebuffer_t *)arg;
     esp_err_t err = build_text_image(s_text_image);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to build text image: %s", esp_err_to_name(err));
@@ -121,34 +121,25 @@ static void text_task(void *arg) {
             .pixels = pixels
         };
 
-        err = framebuffer_draw_image(fb, &image_to_display, 0, 0);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to draw text viewport: %s", esp_err_to_name(err));
-            vTaskDelete(NULL);
-            return;
-        }
-
-        err = led_matrix_render_framebuffer(fb);
+        err = s_render_frame(&image_to_display);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to render text frame: %s", esp_err_to_name(err));
-            vTaskDelete(NULL);
-            return;
+            break;
         }
-
     }
 
     s_task_handle = NULL;
     vTaskDelete(NULL);
 }
 
-esp_err_t text_display_start(framebuffer_t *fb, const text_display_config_t *config) {
+esp_err_t text_display_start(const text_display_config_t *config, text_frame_renderer_t render_frame) {
+    if (render_frame == NULL) {
+        ESP_LOGE(TAG, "Render frame function cannot be NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
     if (s_task_handle != NULL) {
         ESP_LOGW(TAG, "Text display task is already running");
         return ESP_ERR_INVALID_STATE;
-    }
-    if (fb == NULL) {
-        ESP_LOGE(TAG, "Framebuffer is NULL");
-        return ESP_ERR_INVALID_ARG;
     }
     if (config == NULL) {
         ESP_LOGE(TAG, "Text display config is NULL");
@@ -166,7 +157,8 @@ esp_err_t text_display_start(framebuffer_t *fb, const text_display_config_t *con
     }
     strlcpy(s_text, config->text, sizeof(s_text));
     s_scroll_x = 0;
-    BaseType_t task_created = xTaskCreate(text_task, "text_task", 4096, fb, 5, &s_task_handle);
+    s_render_frame = render_frame;
+    BaseType_t task_created = xTaskCreate(text_task, "text_task", 4096, NULL, 5, &s_task_handle);
     if (task_created != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
