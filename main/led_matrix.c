@@ -5,6 +5,10 @@
 #define LED_MATRIX_MAX_BRIGHTNESS_RAW 30
 #define LED_MATRIX_MAX_PIXEL_POWER 40
 
+#define PANEL_WIDTH 16
+#define PANEL_HEIGHT 16
+#define PANEL_PIXELS (PANEL_WIDTH * PANEL_HEIGHT)
+
 static led_strip_handle_t led_strip = NULL;
 static uint8_t s_brightness_raw = 20; // 0-255
 static led_matrix_config_t s_config;
@@ -33,15 +37,24 @@ static int xy_to_index(int x, int y)
         physical_y = s_config.height - 1 - y;
     }
 
-    if (s_config.layout == LED_MATRIX_LAYOUT_SERPENTINE) {
-        if (physical_y % 2 == 0) {
-            return physical_y * s_config.width + x;
-        } else {
-            return physical_y * s_config.width + (s_config.width - 1 - x);
-        }
+    int panel_x = x / PANEL_WIDTH;
+    int panel_y = physical_y / PANEL_HEIGHT;
+
+    int local_x = x % PANEL_WIDTH;
+    int local_y = physical_y % PANEL_HEIGHT;
+
+    int panels_x = s_config.width / PANEL_WIDTH;
+
+    int panel_index = panel_y * panels_x + panel_x;
+
+    int local_index;
+    if (s_config.layout == LED_MATRIX_LAYOUT_SERPENTINE && local_y % 2 == 1) {
+        local_index = local_y * PANEL_WIDTH + (PANEL_WIDTH - 1 - local_x);
+    } else {
+        local_index = local_y * PANEL_WIDTH + local_x;
     }
 
-    return physical_y * s_config.width + x;
+    return panel_index * PANEL_PIXELS + local_index;
 }
 
 esp_err_t led_matrix_init(const led_matrix_config_t *config) {
@@ -50,6 +63,9 @@ esp_err_t led_matrix_init(const led_matrix_config_t *config) {
     }
 
     if (config->width <= 0 || config->height <= 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (config->width % PANEL_WIDTH != 0 || config->height % PANEL_HEIGHT != 0) {
         return ESP_ERR_INVALID_ARG;
     }
 

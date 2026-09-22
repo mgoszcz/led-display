@@ -7,8 +7,6 @@
 
 
 #define BLINK_GPIO 4
-#define MAX_Y 16
-#define MAX_X 16
 
 typedef enum {
     LED_MATRIX_ORIGIN_TOP_LEFT,

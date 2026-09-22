@@ -64,6 +64,11 @@ esp_err_t display_controller_init(uint16_t width, uint16_t height) {
         ESP_LOGE(TAG, "Failed to clear LED matrix: %s", esp_err_to_name(led_matrix_clear_err));
         return led_matrix_clear_err;
     }
+    esp_err_t text_display_init_err = text_display_init(s_display_width, s_display_height);
+    if (text_display_init_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init text display: %s", esp_err_to_name(text_display_init_err));
+        return text_display_init_err;
+    }
     return ESP_OK;
 }
 

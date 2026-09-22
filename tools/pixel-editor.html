@@ -191,10 +191,10 @@
 
     .grid {
       width: min(100%, 560px);
-      aspect-ratio: 1;
+      aspect-ratio: var(--matrix-width) / var(--matrix-height);
       display: grid;
-      grid-template-columns: repeat(16, 1fr);
-      grid-template-rows: repeat(16, 1fr);
+      grid-template-columns: repeat(var(--matrix-width), 1fr);
+      grid-template-rows: repeat(var(--matrix-height), 1fr);
       gap: 2px;
       padding: 8px;
       border: 1px solid #303030;
@@ -283,6 +283,15 @@
           Color
           <input id="colorInput" type="color" value="#2020ff">
         </label>
+        <label>
+          Display size
+          <select id="matrixSizeInput">
+            <option value="16x16" selected>16x16</option>
+            <option value="32x16">32x16</option>
+            <option value="16x32">16x32</option>
+            <option value="32x32">32x32</option>
+          </select>
+        </label>
         <button id="clearButton" type="button">CLEAR</button>
         <button id="saveButton" type="button">SAVE</button>
         <button id="loadButton" type="button">LOAD</button>
@@ -323,7 +332,7 @@
         <div><strong>Brightness</strong>: sends value to <code>/brightness</code></div>
         <div><strong>Save/Load</strong>: stores one drawing in this browser</div>
         <div><strong>Export/Import</strong>: uses a JSON drawing file</div>
-        <div><strong>Image</strong>: converts PNG/JPEG/WebP/GIF to 16x16 pixels</div>
+        <div><strong>Image</strong>: converts PNG/JPEG/WebP/GIF to the selected grid size</div>
         <div><strong>Text</strong>: POST JSON to <code>/text</code> using selected color</div>
         <div><strong>Send</strong>: POST raw RGB888 frame to <code>/frame</code></div>
         <div><strong>Demo</strong>: POST to <code>/demo</code></div>
@@ -332,13 +341,13 @@
   </main>
 
   <script>
-    const MATRIX_WIDTH = 16;
-    const MATRIX_HEIGHT = 16;
-    const FRAME_BYTES = MATRIX_WIDTH * MATRIX_HEIGHT * 3;
+    const DEFAULT_MATRIX_WIDTH = 16;
+    const DEFAULT_MATRIX_HEIGHT = 16;
 
     const ipInput = document.getElementById("ipInput");
     const checkButton = document.getElementById("checkButton");
     const colorInput = document.getElementById("colorInput");
+    const matrixSizeInput = document.getElementById("matrixSizeInput");
     const textInput = document.getElementById("textInput");
     const textSpeedInput = document.getElementById("textSpeedInput");
     const brightnessInput = document.getElementById("brightnessInput");
@@ -362,9 +371,19 @@
     const DOCUMENT_VERSION = 1;
     const DOCUMENT_TYPE = "image";
     const STORAGE_KEY = "led-matrix-pixel-editor-frame";
-    const pixels = Array.from({ length: MATRIX_WIDTH * MATRIX_HEIGHT }, () => ({ r: 0, g: 0, b: 0 }));
+    let matrixWidth = DEFAULT_MATRIX_WIDTH;
+    let matrixHeight = DEFAULT_MATRIX_HEIGHT;
+    let pixels = createEmptyPixels(matrixWidth, matrixHeight);
     let isPointerDown = false;
     let eraseMode = false;
+
+    function createEmptyPixels(width, height) {
+      return Array.from({ length: width * height }, () => ({ r: 0, g: 0, b: 0 }));
+    }
+
+    function getFrameBytesLength() {
+      return matrixWidth * matrixHeight * 3;
+    }
 
     function setStatus(message, type = "") {
       statusEl.textContent = message;
@@ -419,7 +438,7 @@
     }
 
     function buildFrameBytes() {
-      const bytes = new Uint8Array(FRAME_BYTES);
+      const bytes = new Uint8Array(getFrameBytesLength());
 
       for (let i = 0; i < pixels.length; i++) {
         bytes[i * 3 + 0] = pixels[i].r;
@@ -435,8 +454,8 @@
         format: DOCUMENT_FORMAT,
         version: DOCUMENT_VERSION,
         type: DOCUMENT_TYPE,
-        width: MATRIX_WIDTH,
-        height: MATRIX_HEIGHT,
+        width: matrixWidth,
+        height: matrixHeight,
         brightness: Number(brightnessInput.value),
         pixels: pixels.map((pixel) => [pixel.r, pixel.g, pixel.b]),
       };
@@ -461,8 +480,8 @@
         throw new Error(`Expected ${DOCUMENT_TYPE} document type.`);
       }
 
-      if (!snapshot || snapshot.width !== MATRIX_WIDTH || snapshot.height !== MATRIX_HEIGHT) {
-        throw new Error(`Expected ${MATRIX_WIDTH}x${MATRIX_HEIGHT} drawing.`);
+      if (!snapshot || snapshot.width !== matrixWidth || snapshot.height !== matrixHeight) {
+        throw new Error(`Expected ${matrixWidth}x${matrixHeight} drawing.`);
       }
 
       if (!Array.isArray(snapshot.pixels) || snapshot.pixels.length !== pixels.length) {
@@ -537,7 +556,7 @@
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 
       link.href = url;
-      link.download = `led-image-16x16-${timestamp}.json`;
+      link.download = `led-image-${matrixWidth}x${matrixHeight}-${timestamp}.json`;
       link.click();
       URL.revokeObjectURL(url);
       setStatus("Drawing exported as JSON.", "ok");
@@ -585,46 +604,46 @@
 
     function getImageDrawRect(image, mode) {
       const imageRatio = image.naturalWidth / image.naturalHeight;
-      const canvasRatio = MATRIX_WIDTH / MATRIX_HEIGHT;
+      const canvasRatio = matrixWidth / matrixHeight;
 
       if (mode === "fit") {
         if (imageRatio > canvasRatio) {
-          const width = MATRIX_WIDTH;
-          const height = MATRIX_WIDTH / imageRatio;
-          return { dx: 0, dy: (MATRIX_HEIGHT - height) / 2, width, height };
+          const width = matrixWidth;
+          const height = matrixWidth / imageRatio;
+          return { dx: 0, dy: (matrixHeight - height) / 2, width, height };
         }
 
-        const height = MATRIX_HEIGHT;
-        const width = MATRIX_HEIGHT * imageRatio;
-        return { dx: (MATRIX_WIDTH - width) / 2, dy: 0, width, height };
+        const height = matrixHeight;
+        const width = matrixHeight * imageRatio;
+        return { dx: (matrixWidth - width) / 2, dy: 0, width, height };
       }
 
       if (imageRatio > canvasRatio) {
-        const height = MATRIX_HEIGHT;
-        const width = MATRIX_HEIGHT * imageRatio;
-        return { dx: (MATRIX_WIDTH - width) / 2, dy: 0, width, height };
+        const height = matrixHeight;
+        const width = matrixHeight * imageRatio;
+        return { dx: (matrixWidth - width) / 2, dy: 0, width, height };
       }
 
-      const width = MATRIX_WIDTH;
-      const height = MATRIX_WIDTH / imageRatio;
-      return { dx: 0, dy: (MATRIX_HEIGHT - height) / 2, width, height };
+      const width = matrixWidth;
+      const height = matrixWidth / imageRatio;
+      return { dx: 0, dy: (matrixHeight - height) / 2, width, height };
     }
 
     function convertImageToPixels(image) {
       const canvas = document.createElement("canvas");
-      canvas.width = MATRIX_WIDTH;
-      canvas.height = MATRIX_HEIGHT;
+      canvas.width = matrixWidth;
+      canvas.height = matrixHeight;
 
       const context = canvas.getContext("2d", { willReadFrequently: true });
       const drawRect = getImageDrawRect(image, imageModeInput.value);
 
       context.fillStyle = "rgb(0, 0, 0)";
-      context.fillRect(0, 0, MATRIX_WIDTH, MATRIX_HEIGHT);
+      context.fillRect(0, 0, matrixWidth, matrixHeight);
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = "high";
       context.drawImage(image, drawRect.dx, drawRect.dy, drawRect.width, drawRect.height);
 
-      const imageData = context.getImageData(0, 0, MATRIX_WIDTH, MATRIX_HEIGHT).data;
+      const imageData = context.getImageData(0, 0, matrixWidth, matrixHeight).data;
       const nextPixels = [];
 
       for (let i = 0; i < imageData.length; i += 4) {
@@ -646,7 +665,7 @@
       try {
         const image = await loadImageFile(file);
         convertImageToPixels(image);
-        setStatus(`Converted ${file.name} to ${MATRIX_WIDTH}x${MATRIX_HEIGHT}.`, "ok");
+        setStatus(`Converted ${file.name} to ${matrixWidth}x${matrixHeight}.`, "ok");
       } catch (error) {
         setStatus(`Image import failed: ${error.message}`, "error");
       } finally {
@@ -770,7 +789,12 @@
     }
 
     function createGrid() {
-      for (let i = 0; i < MATRIX_WIDTH * MATRIX_HEIGHT; i++) {
+      gridEl.innerHTML = "";
+      gridEl.style.setProperty("--matrix-width", String(matrixWidth));
+      gridEl.style.setProperty("--matrix-height", String(matrixHeight));
+      gridEl.setAttribute("aria-label", `${matrixWidth} by ${matrixHeight} pixel grid`);
+
+      for (let i = 0; i < matrixWidth * matrixHeight; i++) {
         const cell = document.createElement("button");
         cell.type = "button";
         cell.className = "cell";
@@ -802,11 +826,33 @@
       }
     }
 
+    function parseMatrixSize(value) {
+      const [width, height] = value.split("x").map((part) => Number(part));
+
+      if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+        throw new Error("Invalid matrix size.");
+      }
+
+      return { width, height };
+    }
+
+    function resizeMatrix() {
+      const { width, height } = parseMatrixSize(matrixSizeInput.value);
+
+      matrixWidth = width;
+      matrixHeight = height;
+      pixels = createEmptyPixels(matrixWidth, matrixHeight);
+      createGrid();
+      applyPixels(pixels);
+      setStatus(`Grid resized to ${matrixWidth}x${matrixHeight}.`, "ok");
+    }
+
     document.addEventListener("pointerup", () => {
       isPointerDown = false;
     });
 
     checkButton.addEventListener("click", checkHealth);
+    matrixSizeInput.addEventListener("change", resizeMatrix);
     clearButton.addEventListener("click", clearGrid);
     saveButton.addEventListener("click", saveDrawing);
     loadButton.addEventListener("click", loadDrawing);

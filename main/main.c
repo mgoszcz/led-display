@@ -7,6 +7,8 @@
 #include "freertos/task.h"
 #include "esp_check.h"
 
+#define DISPLAY_WIDTH 32
+#define DISPLAY_HEIGHT 16
 
 static esp_err_t handle_frame_upload(const uint8_t *data, size_t len)
 {
@@ -36,10 +38,17 @@ void app_main(void)
     const led_matrix_image_t *smile_image = NULL;
     const led_matrix_image_t *lightning_image = NULL;
 
-    ESP_ERROR_CHECK(display_controller_init(16, 16));
+    ESP_ERROR_CHECK(display_controller_init(DISPLAY_WIDTH, DISPLAY_HEIGHT));
     
     ESP_ERROR_CHECK(wifi_app_start());
-    ESP_ERROR_CHECK(http_server_app_start(handle_frame_upload, handle_demo_enable, handle_brightness, handle_text));
+    ESP_ERROR_CHECK(http_server_app_start(
+        DISPLAY_WIDTH,
+        DISPLAY_HEIGHT,
+        handle_frame_upload,
+        handle_demo_enable,
+        handle_brightness,
+        handle_text
+    ));
     
     ESP_ERROR_CHECK(image_store_get("smile", &smile_image));
     ESP_ERROR_CHECK(image_store_get("lightning", &lightning_image));

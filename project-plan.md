@@ -355,7 +355,7 @@ Current endpoints:
 
 ```text
 GET /health -> OK
-POST /frame -> raw RGB888 frame, exactly 768 bytes
+POST /frame -> raw RGB888 full-frame payload matching configured display size
 POST /demo -> enables startup demo again
 POST /brightness -> brightness percent
 POST /text -> JSON text config
@@ -366,11 +366,11 @@ POST /text -> JSON text config
 Current behavior:
 
 - Local standalone HTML page in `tools/pixel-editor.html`.
-- User can draw a 16x16 frame in the browser.
+- User can draw frames for supported display sizes in the browser.
 - The page sends raw RGB888 bytes to `POST /frame`.
 - The editor supports save/load in browser local storage.
 - The editor supports export/import as `led-image` JSON files.
-- The editor imports common image files and converts them to the current 16x16 grid.
+- The editor imports common image files and converts them to the selected grid size.
 - A brightness slider sends the selected value to `POST /brightness`.
 - Health check, frame upload, demo trigger, and brightness control have been verified on device.
 - Text display control sends JSON to `POST /text`.
@@ -422,7 +422,7 @@ The next architectural cleanup should be a small display controller or render ow
 
 # Next Milestone
 
-Prepare the project for larger rectangular displays and stabilize rendering ownership before adding more animation features:
+Expose the current display configuration to tooling, then continue toward animation support:
 
 ```text
 Browser pixel editor / text controls
@@ -439,20 +439,13 @@ LED matrix render
 
 Suggested next steps:
 
-1. Introduce display size constants/configuration instead of scattered hardcoded `16x16` assumptions.
-2. Prepare firmware and tooling for rectangular or square displays made from 16x16 panels:
-   - 16x16
-   - 32x16
-   - 16x32
-   - 32x32
-   - future rectangular combinations if they remain regular panel grids.
-3. Add/verify CORS `OPTIONS` handling for JSON endpoints such as `/text`.
-4. Test `/text`, `/frame`, `/demo`, and `/brightness` mode switching repeatedly on hardware.
-5. Add a minimal synchronization strategy around framebuffer/render operations, or start extracting a display controller.
-6. Consider extracting demo/application mode handling out of `main.c`.
-7. Decide the next product direction:
+1. Add `GET /display` so the browser editor can read the configured display size from the ESP32.
+2. Update the pixel editor `CHECK` flow to call `/display` and select the matching grid size automatically.
+3. Test `/text`, `/frame`, `/demo`, and `/brightness` mode switching repeatedly on the current multi-panel hardware.
+4. Decide the next product direction:
    - keep using local HTML during development
    - or host the editor directly from ESP32
+5. Start the first animation endpoint/engine once the display-size handshake is in place.
 
 # Known Issues For Future
 
@@ -471,7 +464,7 @@ These are known improvement areas. They are not all blockers for the next small 
 - Keep public API argument validation consistent across all modules.
 - Decide later whether off-screen drawing should fail or clip. Current framebuffer image drawing requires the image to fit.
 - `framebuffer_draw_rgb888()` currently supports only full-frame payloads. That is intentional for the first HTTP MVP.
-- Display dimensions are still partially hardcoded as 16x16 in firmware and tooling. This should be addressed before going deeper into animations or multi-panel support.
+- Display dimensions are now configurable in firmware at compile time, and the editor can be manually switched between supported sizes. Next step: expose the active size through `GET /display`.
 - Demo/application mode is currently simple shared state in `main.c`. This is acceptable for MVP, but should become a small app-state module, display controller, or event-driven flow later.
 - Rendering can currently be initiated by more than one context:
   - main demo loop
@@ -483,9 +476,9 @@ These are known improvement areas. They are not all blockers for the next small 
 - Automatic brightness based on ambient light is a future hardware/software feature, likely using a photoresistor or light sensor.
 - `tools/pixel-editor.html` is not hosted by ESP32 yet.
 - Local editor save/load currently uses one browser local storage slot only. Multiple named drawings are future work.
-- Current `/frame` endpoint accepts only full 16x16 frames. Partial updates or single-pixel control are future work.
+- Current `/frame` endpoint accepts only full-frame raw RGB888 payloads matching the configured display size. Partial updates or single-pixel control are future work.
 - `led-image` is currently an editor/document format, not a device render format. Keep `/frame` raw RGB888 for live rendering.
-- Photo/image conversion currently supports browser-side fit/crop into the 16x16 grid. More advanced controls such as gamma correction, contrast, dithering, and palette reduction are future work.
+- Photo/image conversion currently supports browser-side fit/crop into the selected grid size. More advanced controls such as gamma correction, contrast, dithering, and palette reduction are future work.
 - Text rendering exists as an MVP, but it currently owns its own timer/task and renders directly. Later it should feed frames/events into a display controller.
 - `sdkconfig` may contain Wi-Fi credentials. It is ignored by git now; keep it that way unless credentials are removed.
 
@@ -493,15 +486,18 @@ These are known improvement areas. They are not all blockers for the next small 
 
 ## Display Size And Multi-Panel Layout
 
-Near-term architectural priority:
+Current status:
 
-- Remove scattered hardcoded 16x16 assumptions.
-- Support displays as regular rectangular/square grids made from 16x16 panels.
-- Initial target configurations:
+- Firmware uses compile-time display width/height constants.
+- `display_controller`, framebuffer rendering, `/frame`, text viewport, and the local pixel editor are prepared for supported rectangular display sizes.
+- `led_matrix` has panel-aware `xy_to_index()` for chained 16x16 panels.
+- Initial supported configurations:
   - 16x16: one panel
   - 32x16: two panels side by side
   - 16x32: two panels stacked vertically
   - 32x32: four panels
+- `led_matrix_init()` validates that display dimensions are multiples of the 16x16 panel size.
+- Old fixed `MAX_X`/`MAX_Y` constants have been removed.
 
 Important distinction:
 
@@ -511,6 +507,28 @@ Important distinction:
 - Physical LED mapping:
   - how logical `(x, y)` maps to the actual LED index in chained WS2812B strips
   - depends on panel order, panel orientation, origin, and serpentine layout
+
+Current panel-order contract:
+
+- Panels are 16x16.
+- Displays are regular rectangular grids made from these panels.
+- Panels are chained in fixed row-major order:
+
+```text
+32x16:
+0 1
+
+16x32:
+0
+1
+
+32x32:
+0 1
+2 3
+```
+
+- Each panel uses the same orientation and serpentine layout.
+- Advanced user-configurable panel ordering is a future calibration feature. One possible flow: display a large number on each physical panel, let the user confirm/reorder the visible layout in the UI, then persist a panel-order map.
 
 Suggested configuration direction:
 
@@ -534,19 +552,20 @@ typedef struct {
 } display_config_t;
 ```
 
-Expected affected areas:
+Affected areas:
 
 - `main.c`
-  - framebuffer pixel buffer size
-  - `led_matrix_config_t`
+  - display size constants
+  - `display_controller_init(width, height)`
+  - `http_server_app_start(width, height, ...)`
 - `http_server_app`
   - `/frame` byte length
   - request validation
 - `framebuffer`
   - should mostly already be dimension-aware
 - `text_display_engine`
-  - viewport width/height should follow display size
-  - text padding should adapt to display width
+  - viewport width/height follows display size
+  - text padding adapts to display width
 - `tools/pixel-editor.html`
   - grid dimensions
   - raw frame byte count
@@ -555,22 +574,37 @@ Expected affected areas:
 - built-in images
   - currently 16x16; larger displays may need scaling, centering, or separate assets
 
-Preferred order:
+Next cleanup:
 
-1. Centralize display width/height for current 16x16.
-2. Replace hardcoded firmware constants with centralized size constants.
-3. Update local editor to use configurable width/height constants.
-4. Verify current 16x16 still works.
-5. Add/verify physical mapping for two-panel configurations.
-6. Test 32x16 and/or 16x32 on real hardware.
-7. Only then build more advanced animation features.
+1. Add `GET /display` returning at least:
+
+```json
+{
+  "width": 32,
+  "height": 16
+}
+```
+
+2. Later extend the response with panel metadata if needed:
+
+```json
+{
+  "width": 32,
+  "height": 16,
+  "panelWidth": 16,
+  "panelHeight": 16,
+  "panelOrder": "row-major",
+  "layout": "serpentine",
+  "origin": "bottom-left"
+}
+```
 
 ## Web Pixel Editor
 
 Current short-term product goal:
 
 ```text
-Browser 16x16 grid editor
+Browser grid editor
         |
         v
 POST /frame raw RGB888
@@ -586,11 +620,13 @@ Preferred order:
 
 1. Implement `POST /frame`. DONE
 2. Test with generated raw RGB888 data. DONE
-3. Build a local browser-based 16x16 editor. DONE
+3. Build a local browser-based editor. DONE
 4. Send frames from browser to ESP32. DONE
 5. Add simple save/load/export for drawings. DONE
 6. Add device-side brightness control. DONE
-7. Later host the web UI directly from ESP32.
+7. Add manual display size selection for 16x16, 32x16, 16x32, and 32x32. DONE
+8. Add `GET /display` and auto-select the editor grid size from the device.
+9. Later host the web UI directly from ESP32.
 
 Potential next editor features:
 
@@ -923,8 +959,10 @@ Configuration:
 
 Tasks:
 
-- Extend and verify `xy_to_index()`.
-- Handle two chained panels.
+- Extend and verify `xy_to_index()`. DONE
+- Handle two chained panels. DONE for fixed row-major panel order.
+- Test text rendering on 32x16 hardware. DONE
+- Test `/frame` from the pixel editor on 32x16 hardware. NEXT
 - Test all four corners.
 - Verify orientation and serpentine behavior.
 

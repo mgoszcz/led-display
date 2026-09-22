@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include "cJSON.h"
 
-#define FRAME_SIZE_BYTES (16 * 16 * 3)
+
 #define TEXT_JSON_MAX_LEN 256
 
 static const char *TAG = "HTTP_SERVER_APP";
@@ -14,6 +14,7 @@ static http_frame_handler_t s_frame_handler = NULL;
 static http_demo_handler_t s_demo_handler = NULL;
 static http_brightness_handler_t s_brightness_handler = NULL;
 static http_text_handler_t s_text_handler = NULL;
+static uint32_t s_frame_size_bytes;
 
 static void set_cors_headers(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -40,19 +41,19 @@ static esp_err_t health_check_handler(httpd_req_t *req) {
 static esp_err_t frame_draw_handler(httpd_req_t *req) {
     set_cors_headers(req);
 
-    if (req->content_len != FRAME_SIZE_BYTES) { // 16x16 RGB image has 768 bytes
+    if (req->content_len != s_frame_size_bytes) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content length");
         return ESP_FAIL;
     }
-    uint8_t frame_data[FRAME_SIZE_BYTES];
+    uint8_t frame_data[s_frame_size_bytes];
 
     size_t received_total = 0;
 
-    while (received_total < FRAME_SIZE_BYTES) {
+    while (received_total < s_frame_size_bytes) {
         int received = httpd_req_recv(
             req,
             (char *)frame_data + received_total,
-            FRAME_SIZE_BYTES - received_total
+            s_frame_size_bytes - received_total
         );
 
         if (received == HTTPD_SOCK_ERR_TIMEOUT) {
@@ -68,7 +69,7 @@ static esp_err_t frame_draw_handler(httpd_req_t *req) {
         received_total += received;
     }
 
-    esp_err_t err = s_frame_handler(frame_data, FRAME_SIZE_BYTES);
+    esp_err_t err = s_frame_handler(frame_data, s_frame_size_bytes);
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to handle frame");
         return ESP_FAIL;
@@ -291,6 +292,8 @@ static const httpd_uri_t text_options_uri = {
 };
 
 esp_err_t http_server_app_start(
+    uint16_t display_width,
+    uint16_t display_height,
     http_frame_handler_t frame_handler,
     http_demo_handler_t demo_handler,
     http_brightness_handler_t brightness_handler,
@@ -312,6 +315,7 @@ esp_err_t http_server_app_start(
         ESP_LOGE(TAG, "Text handler cannot be NULL");
         return ESP_ERR_INVALID_ARG;
     }
+    s_frame_size_bytes = display_height * display_width * 3;
     s_frame_handler = frame_handler;
     s_demo_handler = demo_handler;
     s_brightness_handler = brightness_handler;

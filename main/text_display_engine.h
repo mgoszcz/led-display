@@ -14,3 +14,5 @@ esp_err_t text_display_start(
     const text_display_config_t *config,
     text_frame_renderer_t render_frame
 );
+
+esp_err_t text_display_init(uint16_t display_width, uint16_t display_height);

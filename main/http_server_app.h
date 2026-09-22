@@ -11,6 +11,8 @@ typedef esp_err_t (*http_brightness_handler_t)(int brightness);
 typedef esp_err_t (*http_text_handler_t)(const text_display_config_t *config);
 
 esp_err_t http_server_app_start(
+    uint16_t display_width,
+    uint16_t display_height,
     http_frame_handler_t frame_handler,
     http_demo_handler_t demo_handler,
     http_brightness_handler_t brightness_handler,

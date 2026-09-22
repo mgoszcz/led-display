@@ -12,23 +12,24 @@
 #define RED ((rgb_t){255, 0, 0})
 #define OFF ((rgb_t){0, 0, 0})
 #define TEXT_MAX_CHARS 64
-#define TEXT_IMAGE_HEIGHT 16
-#define TEXT_IMAGE_WIDTH_MAX (16 + (TEXT_MAX_CHARS * (FONT_5X7_WIDTH + 1)) + 16)
-#define TEXT_VIEWPORT_WIDTH 16
-#define TEXT_VIEWPORT_HEIGHT 16
+#define TEXT_IMAGE_WIDTH_MAX 512
+#define TEXT_IMAGE_HEIGHT_MAX 32
 #define FONT_WIDTH 5
 #define FONT_HEIGHT 7
 #define FONT_SPACING 1
-#define TEXT_PADDING_X 16
-#define TEXT_PADDING_Y 6
+#define TEXT_VIEWPORT_PIXELS_MAX (32 * 32)
 
 static const char *TAG = "TEXT_DISPLAY_ENGINE";
 
-static rgb_t s_text_image[TEXT_IMAGE_HEIGHT][TEXT_IMAGE_WIDTH_MAX];
+static uint16_t s_viewport_width;
+static uint16_t s_viewport_height;
+static uint16_t s_text_padding_x;
+static rgb_t s_text_image[TEXT_IMAGE_HEIGHT_MAX][TEXT_IMAGE_WIDTH_MAX];
 static uint16_t s_text_image_width;
 static char s_text[TEXT_MAX_CHARS + 1];
 static rgb_t s_text_color;
 static uint32_t s_speed_ms;
+static rgb_t s_viewport_pixels[TEXT_VIEWPORT_PIXELS_MAX];
 
 static TaskHandle_t s_task_handle = NULL;
 static esp_timer_handle_t s_timer;
@@ -36,13 +37,17 @@ static uint16_t s_scroll_x = 0;
 static bool s_stop_requested = false;
 static text_frame_renderer_t s_render_frame = NULL;
 
-static esp_err_t build_text_image(rgb_t image[TEXT_IMAGE_HEIGHT][TEXT_IMAGE_WIDTH_MAX]) {
+static esp_err_t build_text_image(rgb_t image[TEXT_IMAGE_HEIGHT_MAX][TEXT_IMAGE_WIDTH_MAX]) {
     size_t length = strlen(s_text);
     if (length > TEXT_MAX_CHARS) {
         length = TEXT_MAX_CHARS;
     }
-    s_text_image_width = 16 + length * (FONT_5X7_WIDTH + FONT_SPACING) + 16;
-    for (int y = 0; y < TEXT_IMAGE_HEIGHT; y++) {
+    s_text_image_width = s_text_padding_x + length * (FONT_5X7_WIDTH + FONT_SPACING) + s_text_padding_x;
+    if (s_text_image_width > TEXT_IMAGE_WIDTH_MAX) {
+        ESP_LOGW(TAG, "Text image width exceeds maximum size");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    for (int y = 0; y < s_viewport_height; y++) {
         for (int x = 0; x < s_text_image_width; x++) {
             image[y][x] = OFF;
         }
@@ -52,8 +57,8 @@ static esp_err_t build_text_image(rgb_t image[TEXT_IMAGE_HEIGHT][TEXT_IMAGE_WIDT
         const font_5x7_glyph_t *glyph = font_5x7_get_glyph(c);
         for (int y = 0; y < FONT_HEIGHT; y++) {
             for (int x = 0; x < FONT_5X7_WIDTH; x++) {
-                int img_x = TEXT_PADDING_X + i * (FONT_5X7_WIDTH + FONT_SPACING) + x;
-                int img_y = TEXT_PADDING_Y + y;
+                int img_x = s_text_padding_x + i * (FONT_5X7_WIDTH + FONT_SPACING) + x;
+                int img_y = ((s_viewport_height - FONT_5X7_HEIGHT) / 2) + y;
                 if (font_5x7_get_pixel(glyph, x, y)) {
                     image[img_y][img_x] = s_text_color;
                 }
@@ -102,23 +107,21 @@ static void text_task(void *arg) {
             break;
         }
 
-        rgb_t pixels[TEXT_VIEWPORT_HEIGHT * TEXT_VIEWPORT_WIDTH];
-
-        for (int y = 0; y < TEXT_VIEWPORT_HEIGHT; y++) {
-            for (int x = 0; x < TEXT_VIEWPORT_WIDTH; x++) {
-                pixels[y * TEXT_VIEWPORT_WIDTH + x] = s_text_image[y][x + s_scroll_x];
+        for (int y = 0; y < s_viewport_height; y++) {
+            for (int x = 0; x < s_viewport_width; x++) {
+                s_viewport_pixels[y * s_viewport_width + x] = s_text_image[y][x + s_scroll_x];
             }
         }
 
         s_scroll_x++;
-        if (s_scroll_x + TEXT_VIEWPORT_WIDTH > length) {
+        if (s_scroll_x + s_viewport_width > length) {
             s_scroll_x = 0;
         }
 
         led_matrix_image_t image_to_display = {
-            .width = TEXT_VIEWPORT_WIDTH,
-            .height = TEXT_VIEWPORT_HEIGHT,
-            .pixels = pixels
+            .width = s_viewport_width,
+            .height = s_viewport_height,
+            .pixels = s_viewport_pixels
         };
 
         err = s_render_frame(&image_to_display);
@@ -185,4 +188,23 @@ esp_err_t text_display_stop() {
 
 bool text_display_is_running() {
     return s_task_handle != NULL;
+}
+
+esp_err_t text_display_init(uint16_t display_width, uint16_t display_height) {
+    if (display_height > TEXT_IMAGE_HEIGHT_MAX) {
+        ESP_LOGE(TAG, "Display height exceeds maximum");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (display_width > TEXT_IMAGE_WIDTH_MAX) {
+        ESP_LOGE(TAG, "Display width exceeds maximum");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (display_width * display_height > TEXT_VIEWPORT_PIXELS_MAX) {
+        ESP_LOGE(TAG, "Viewport size exceeds maximum");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    s_viewport_width = display_width;
+    s_viewport_height = display_height;
+    s_text_padding_x = display_width;
+    return ESP_OK;
 }
