@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include <stdlib.h>
 #include "cJSON.h"
+#include <stdio.h>
 
 
 #define TEXT_JSON_MAX_LEN 256
@@ -15,6 +16,8 @@ static http_demo_handler_t s_demo_handler = NULL;
 static http_brightness_handler_t s_brightness_handler = NULL;
 static http_text_handler_t s_text_handler = NULL;
 static uint32_t s_frame_size_bytes;
+static uint16_t s_width;
+static uint16_t s_height;
 
 static void set_cors_headers(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -35,6 +38,29 @@ static esp_err_t health_check_handler(httpd_req_t *req) {
     set_cors_headers(req);
     const char *response = "OK";
     httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t get_display_handler(httpd_req_t *req) {
+    set_cors_headers(req);
+    char response[64];
+
+    int written = snprintf(
+        response,
+        sizeof(response),
+        "{\"width\":%d,\"height\":%d}",
+        s_width,
+        s_height
+    );
+
+    if (written < 0 || written >= sizeof(response)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JSON response too large");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+
     return ESP_OK;
 }
 
@@ -291,6 +317,13 @@ static const httpd_uri_t text_options_uri = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t get_display_uri = {
+    .uri = "/display",
+    .method = HTTP_GET,
+    .handler = get_display_handler,
+    .user_ctx = NULL
+};
+
 esp_err_t http_server_app_start(
     uint16_t display_width,
     uint16_t display_height,
@@ -316,6 +349,8 @@ esp_err_t http_server_app_start(
         return ESP_ERR_INVALID_ARG;
     }
     s_frame_size_bytes = display_height * display_width * 3;
+    s_width = display_width;
+    s_height = display_height;
     s_frame_handler = frame_handler;
     s_demo_handler = demo_handler;
     s_brightness_handler = brightness_handler;
@@ -333,12 +368,13 @@ esp_err_t http_server_app_start(
     esp_err_t err4 = httpd_register_uri_handler(s_server, &brightness_uri);
     esp_err_t err5 = httpd_register_uri_handler(s_server, &text_uri);
     esp_err_t err6 = httpd_register_uri_handler(s_server, &text_options_uri);
+    esp_err_t err7 = httpd_register_uri_handler(s_server, &get_display_uri);
 
-    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK) {
+    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK || err7 != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register URI handler");
         httpd_stop(s_server);
         s_server = NULL;
-        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : err6))));
+        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : (err6 != ESP_OK ? err6 : err7)))));
     }
     return ESP_OK;
 }

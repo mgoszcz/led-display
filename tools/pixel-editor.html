@@ -390,6 +390,10 @@
       statusEl.className = `status ${type}`.trim();
     }
 
+    function getMatrixSizeValue(width, height) {
+      return `${width}x${height}`;
+    }
+
     function getBaseUrl() {
       const raw = ipInput.value.trim();
       if (!raw) {
@@ -675,17 +679,51 @@
 
     async function checkHealth() {
       try {
-        const response = await fetch(`${getBaseUrl()}/health`, { method: "GET" });
+        const baseUrl = getBaseUrl();
+        const response = await fetch(`${baseUrl}/health`, { method: "GET" });
         const text = await response.text();
 
         if (response.ok && text.trim() === "OK") {
-          setStatus("ESP32 health check OK.", "ok");
+          await loadDisplayConfig(baseUrl);
         } else {
           setStatus(`Unexpected health response: ${response.status} ${text}`, "error");
         }
       } catch (error) {
-        setStatus(`Health check failed: ${error.message}`, "error");
+        setStatus(`Connection check failed: ${error.message}`, "error");
       }
+    }
+
+    async function loadDisplayConfig(baseUrl) {
+      const response = await fetch(`${baseUrl}/display`, { method: "GET" });
+      const text = await response.text();
+
+      if (!response.ok) {
+        throw new Error(`Display config failed: ${response.status} ${text}`);
+      }
+
+      let config;
+      try {
+        config = JSON.parse(text);
+      } catch {
+        throw new Error("Display config response is not valid JSON.");
+      }
+
+      const width = Number(config.width);
+      const height = Number(config.height);
+
+      if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+        throw new Error("Display config has invalid width or height.");
+      }
+
+      const sizeValue = getMatrixSizeValue(width, height);
+      const optionExists = Array.from(matrixSizeInput.options).some((option) => option.value === sizeValue);
+
+      if (!optionExists) {
+        throw new Error(`Unsupported display size from ESP32: ${sizeValue}.`);
+      }
+
+      setMatrixSize(width, height, false);
+      setStatus(`ESP32 health check OK. Display size: ${sizeValue}.`, "ok");
     }
 
     async function sendFrame() {
@@ -836,15 +874,35 @@
       return { width, height };
     }
 
-    function resizeMatrix() {
-      const { width, height } = parseMatrixSize(matrixSizeInput.value);
+    function setMatrixSize(width, height, keepStatus) {
+      const sizeValue = getMatrixSizeValue(width, height);
+
+      if (matrixSizeInput.value !== sizeValue) {
+        matrixSizeInput.value = sizeValue;
+      }
+
+      if (matrixWidth === width && matrixHeight === height) {
+        if (!keepStatus) {
+          return;
+        }
+        setStatus(`Grid resized to ${matrixWidth}x${matrixHeight}.`, "ok");
+        return;
+      }
 
       matrixWidth = width;
       matrixHeight = height;
       pixels = createEmptyPixels(matrixWidth, matrixHeight);
       createGrid();
       applyPixels(pixels);
-      setStatus(`Grid resized to ${matrixWidth}x${matrixHeight}.`, "ok");
+
+      if (keepStatus) {
+        setStatus(`Grid resized to ${matrixWidth}x${matrixHeight}.`, "ok");
+      }
+    }
+
+    function resizeMatrix() {
+      const { width, height } = parseMatrixSize(matrixSizeInput.value);
+      setMatrixSize(width, height, true);
     }
 
     document.addEventListener("pointerup", () => {
