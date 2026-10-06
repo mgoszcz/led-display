@@ -8,6 +8,7 @@ typedef enum {
     DISPLAY_MODE_DEMO,
     DISPLAY_MODE_FRAME,
     DISPLAY_MODE_TEXT,
+    DISPLAY_MODE_ANIMATION,
 } display_mode_t;
 
 esp_err_t display_controller_init(uint16_t width, uint16_t height);
@@ -16,4 +17,5 @@ esp_err_t display_controller_start_demo(void);
 esp_err_t display_controller_set_brightness(int brightness);
 esp_err_t display_controller_display_text(const text_display_config_t *config);
 esp_err_t display_controller_display_demo_image(const led_matrix_image_t *image);
+esp_err_t display_controller_display_demo_animation(void);
 display_mode_t display_controller_get_mode(void);

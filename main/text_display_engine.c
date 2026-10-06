@@ -28,7 +28,7 @@ static rgb_t s_text_image[TEXT_IMAGE_HEIGHT_MAX][TEXT_IMAGE_WIDTH_MAX];
 static uint16_t s_text_image_width;
 static char s_text[TEXT_MAX_CHARS + 1];
 static rgb_t s_text_color;
-static uint32_t s_speed_ms;
+static uint32_t s_frame_duration_ms;
 static rgb_t s_viewport_pixels[TEXT_VIEWPORT_PIXELS_MAX];
 
 static TaskHandle_t s_task_handle = NULL;
@@ -87,7 +87,7 @@ static esp_err_t timer_init() {
         .name = "text_timer"
     };
     ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &s_timer), TAG, "Failed to create timer");
-    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_timer, s_speed_ms * 1000), TAG, "Failed to start timer");
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_timer, s_frame_duration_ms * 1000), TAG, "Failed to start timer");
     return ESP_OK;
 }
 
@@ -154,9 +154,9 @@ esp_err_t text_display_start(const text_display_config_t *config, text_frame_ren
     }
     s_text_color = config->color;
     if (config->speed_ms != 0) {
-        s_speed_ms = config->speed_ms;
+        s_frame_duration_ms = config->speed_ms;
     } else {
-        s_speed_ms = 100; // Default speed
+        s_frame_duration_ms = 100; // Default speed
     }
     strlcpy(s_text, config->text, sizeof(s_text));
     s_scroll_x = 0;

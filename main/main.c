@@ -30,7 +30,10 @@ static esp_err_t handle_text(const text_display_config_t *config)
     return display_controller_display_text(config);
 }
 
-
+static esp_err_t handle_animation(void)
+{
+    return display_controller_display_demo_animation();
+}
 
 void app_main(void)
 {
@@ -47,7 +50,8 @@ void app_main(void)
         handle_frame_upload,
         handle_demo_enable,
         handle_brightness,
-        handle_text
+        handle_text,
+        handle_animation
     ));
     
     ESP_ERROR_CHECK(image_store_get("smile", &smile_image));

@@ -5,6 +5,8 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "text_display_engine.h"
+#include "animation_display_engine.h"
+#include "animations.h"
 
 #define DISPLAY_MAX_WIDTH 32
 #define DISPLAY_MAX_HEIGHT 32
@@ -69,6 +71,11 @@ esp_err_t display_controller_init(uint16_t width, uint16_t height) {
         ESP_LOGE(TAG, "Failed to init text display: %s", esp_err_to_name(text_display_init_err));
         return text_display_init_err;
     }
+    esp_err_t animation_display_init_err = animation_display_init(s_display_width, s_display_height);
+    if (animation_display_init_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init animation display: %s", esp_err_to_name(animation_display_init_err));
+        return animation_display_init_err;
+    }
     return ESP_OK;
 }
 
@@ -105,6 +112,14 @@ static esp_err_t display_controller_set_mode(display_mode_t mode) {
         if (text_display_err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to stop text display task: %s", esp_err_to_name(text_display_err));
             return text_display_err;
+        }
+    }
+    if (previous_mode == DISPLAY_MODE_ANIMATION) {
+        ESP_LOGI(TAG, "Stopping animation display task");
+        esp_err_t animation_display_err = animation_display_stop();
+        if (animation_display_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to stop animation display task: %s", esp_err_to_name(animation_display_err));
+            return animation_display_err;
         }
     }
 
@@ -217,4 +232,30 @@ esp_err_t display_controller_display_text(const text_display_config_t *config) {
 
 display_mode_t display_controller_get_mode(void) {
     return s_display_mode;
+}
+
+esp_err_t display_controller_display_demo_animation(void) {
+    if (animation_is_running()) {
+        ESP_LOGW(TAG, "Animation task is already running. Stopping it first.");
+        esp_err_t err = animation_display_stop();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to stop existing animation display task: %s", esp_err_to_name(err));
+            return err;
+        }
+    }
+    esp_err_t display_mode_err = display_controller_set_mode(DISPLAY_MODE_ANIMATION);
+    if (display_mode_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set display mode: %s", esp_err_to_name(display_mode_err));
+        return display_mode_err;
+    }
+    const animation_t *animation = demo_animation(s_display_width, s_display_height);
+    if (animation == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t ret = animation_display_start_borrowed(animation, display_controller_render_image);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start animation display: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    return ESP_OK;
 }

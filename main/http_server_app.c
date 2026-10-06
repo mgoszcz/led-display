@@ -15,6 +15,7 @@ static http_frame_handler_t s_frame_handler = NULL;
 static http_demo_handler_t s_demo_handler = NULL;
 static http_brightness_handler_t s_brightness_handler = NULL;
 static http_text_handler_t s_text_handler = NULL;
+static http_animation_handler_t s_animation_handler = NULL;
 static uint32_t s_frame_size_bytes;
 static uint16_t s_width;
 static uint16_t s_height;
@@ -275,6 +276,19 @@ static esp_err_t text_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+esp_err_t animation_handler(httpd_req_t *req) {
+    set_cors_headers(req);
+
+    esp_err_t err = s_animation_handler();
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to enable animation");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+}
+
 static const httpd_uri_t health_check_uri = {
     .uri = "/health",
     .method = HTTP_GET,
@@ -324,13 +338,21 @@ static const httpd_uri_t get_display_uri = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t animation_uri = {
+    .uri = "/animation",
+    .method = HTTP_POST,
+    .handler = animation_handler,
+    .user_ctx = NULL
+};
+
 esp_err_t http_server_app_start(
     uint16_t display_width,
     uint16_t display_height,
     http_frame_handler_t frame_handler,
     http_demo_handler_t demo_handler,
     http_brightness_handler_t brightness_handler,
-    http_text_handler_t text_handler
+    http_text_handler_t text_handler,
+    http_animation_handler_t animation_handler
 ) {
     if (frame_handler == NULL) {
         ESP_LOGE(TAG, "Frame handler cannot be NULL");
@@ -348,6 +370,10 @@ esp_err_t http_server_app_start(
         ESP_LOGE(TAG, "Text handler cannot be NULL");
         return ESP_ERR_INVALID_ARG;
     }
+    if (animation_handler == NULL) {
+        ESP_LOGE(TAG, "Animation handler cannot be NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
     s_frame_size_bytes = display_height * display_width * 3;
     s_width = display_width;
     s_height = display_height;
@@ -355,6 +381,7 @@ esp_err_t http_server_app_start(
     s_demo_handler = demo_handler;
     s_brightness_handler = brightness_handler;
     s_text_handler = text_handler;
+    s_animation_handler = animation_handler;
     if (s_server != NULL) {
         return ESP_OK;
     }
@@ -369,12 +396,13 @@ esp_err_t http_server_app_start(
     esp_err_t err5 = httpd_register_uri_handler(s_server, &text_uri);
     esp_err_t err6 = httpd_register_uri_handler(s_server, &text_options_uri);
     esp_err_t err7 = httpd_register_uri_handler(s_server, &get_display_uri);
+    esp_err_t err8 = httpd_register_uri_handler(s_server, &animation_uri);
 
-    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK || err7 != ESP_OK) {
+    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK || err7 != ESP_OK || err8 != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register URI handler");
         httpd_stop(s_server);
         s_server = NULL;
-        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : (err6 != ESP_OK ? err6 : err7)))));
+        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : (err6 != ESP_OK ? err6 : (err7 != ESP_OK ? err7 : err8))))));
     }
     return ESP_OK;
 }
