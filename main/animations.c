@@ -1,16 +1,14 @@
 #include "animations.h"
-#include <stdio.h>
+#include <stddef.h>
 
-#define Y ((rgb_t){255, 255, 0})
-#define R ((rgb_t){255, 20, 0})
 #define OFF ((rgb_t){0, 0, 0})
 
 #define FRONT ((rgb_t){0, 180, 255})
 #define TRAIL1 ((rgb_t){0, 60, 120})
 #define TRAIL2 ((rgb_t){0, 20, 50})
 
-#define SCANNER_FRAME_COUNT_MAX 32
-#define DISPLAY_MAX_PIXELS 1024
+#define SCANNER_FRAME_COUNT_MAX 64
+#define DISPLAY_MAX_PIXELS 512
 
 static rgb_t s_pixels[SCANNER_FRAME_COUNT_MAX][DISPLAY_MAX_PIXELS];
 static led_matrix_image_t s_frames[SCANNER_FRAME_COUNT_MAX];
@@ -20,7 +18,7 @@ const animation_t *demo_animation(uint16_t width, uint16_t height) {
     if (width == 0 || height == 0 || width * height > DISPLAY_MAX_PIXELS) {
         return NULL;
     }
-    uint16_t frame_count = width;
+    uint16_t frame_count = width * 2;
     if (frame_count > SCANNER_FRAME_COUNT_MAX) {
         frame_count = SCANNER_FRAME_COUNT_MAX;
     }
@@ -28,14 +26,26 @@ const animation_t *demo_animation(uint16_t width, uint16_t height) {
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 uint32_t index = y * width + x;
-                if (x == i) {
-                    s_pixels[i][index] = FRONT;
-                } else if (i > 0 && x == i - 1) {
-                    s_pixels[i][index] = TRAIL1;
-                } else if (i > 1 && x == i - 2) {
-                    s_pixels[i][index] = TRAIL2;
+                if (i < width) {
+                    if (x == i) {
+                        s_pixels[i][index] = FRONT;
+                    } else if (i > 0 && x == i - 1) {
+                        s_pixels[i][index] = TRAIL1;
+                    } else if (i > 1 && x == i - 2) {
+                        s_pixels[i][index] = TRAIL2;
+                    } else {
+                        s_pixels[i][index] = OFF;
+                    }
                 } else {
-                    s_pixels[i][index] = OFF;
+                    if (x == width - (i + 1 - width)) {
+                        s_pixels[i][index] = FRONT;
+                    } else if (i > width && x == width - (i - width)) {
+                        s_pixels[i][index] = TRAIL1;
+                    } else if (i > (width + 1) && x == width - (i - 1 - width)) {
+                        s_pixels[i][index] = TRAIL2;
+                    } else {
+                        s_pixels[i][index] = OFF;
+                    }
                 }
             }
         }

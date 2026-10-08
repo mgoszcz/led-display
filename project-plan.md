@@ -422,7 +422,7 @@ The next architectural cleanup should be a small display controller or render ow
 
 # Next Milestone
 
-Expose the current display configuration to tooling, then continue toward animation support:
+Refactor animations toward frame sources instead of storing every frame in RAM:
 
 ```text
 Browser pixel editor / text controls
@@ -437,15 +437,22 @@ framebuffer / text engine
 LED matrix render
 ```
 
+Current animation MVP status:
+
+- `/animation` endpoint: DONE
+- demo scanner animation: DONE
+- mode switching between animation, frame, text, and demo: DONE
+- CORS `OPTIONS` for `/animation`: DONE
+
 Suggested next steps:
 
-1. Add `GET /display` so the browser editor can read the configured display size from the ESP32.
-2. Update the pixel editor `CHECK` flow to call `/display` and select the matching grid size automatically.
-3. Test `/text`, `/frame`, `/demo`, and `/brightness` mode switching repeatedly on the current multi-panel hardware.
-4. Decide the next product direction:
-   - keep using local HTML during development
-   - or host the editor directly from ESP32
-5. Start the first animation endpoint/engine once the display-size handshake is in place.
+1. Keep using the local HTML editor during development. Hosting the UI from ESP32 is useful later, but does not unblock display features now.
+2. Refactor animation playback so the engine owns one frame buffer and asks an animation source to build/load the next frame.
+3. Move built-in animations, such as the scanner, to procedural frame generation.
+4. After procedural/built-in animations are clean, design uploaded/stored animations:
+   - HTTP upload format
+   - frame storage
+   - playback from RAM, flash, or filesystem
 
 # Known Issues For Future
 
@@ -465,6 +472,7 @@ These are known improvement areas. They are not all blockers for the next small 
 - Decide later whether off-screen drawing should fail or clip. Current framebuffer image drawing requires the image to fit.
 - `framebuffer_draw_rgb888()` currently supports only full-frame payloads. That is intentional for the first HTTP MVP.
 - Display dimensions are now configurable in firmware at compile time, and the editor can be manually switched between supported sizes. Next step: expose the active size through `GET /display`.
+- Storing all animation frames as `rgb_t frames[frame_count][pixel_count]` can quickly overflow internal DRAM. Procedural/built-in animations should generate one frame at a time. Uploaded/stored animations need explicit size limits and probably flash/filesystem storage.
 - Demo/application mode is currently simple shared state in `main.c`. This is acceptable for MVP, but should become a small app-state module, display controller, or event-driven flow later.
 - Rendering can currently be initiated by more than one context:
   - main demo loop
@@ -753,25 +761,102 @@ LED strip
 
 ## Animations
 
-Potential animation type:
+Current MVP:
 
-```c
-typedef struct {
-    uint16_t frame_count;
-    uint16_t frame_delay_ms;
-    const led_matrix_image_t *frames;
-} led_matrix_animation_t;
+- `POST /animation` starts a built-in demo scanner animation.
+- The animation path is:
+
+```text
+HTTP /animation
+        |
+        v
+display_controller
+        |
+        v
+animation_display_engine
+        |
+        v
+render callback
+        |
+        v
+framebuffer + LED matrix
 ```
 
-Initial animation ideas:
+Important RAM lesson:
+
+- A full frame for `32x32` is `1024 * sizeof(rgb_t)`.
+- Holding many frames as `static rgb_t frame_pixels[frame_count][DISPLAY_MAX_PIXELS]` quickly consumes internal DRAM.
+- Built-in procedural animations should not store every generated frame.
+- The engine should eventually keep one reusable frame buffer and ask an animation source to produce/copy/decode the current frame.
+
+Preferred next architecture:
+
+```c
+typedef esp_err_t (*animation_build_frame_t)(
+    uint16_t frame_index,
+    rgb_t *out_pixels,
+    uint16_t width,
+    uint16_t height
+);
+
+typedef struct {
+    uint16_t width;
+    uint16_t height;
+    uint16_t frame_count;
+    uint32_t frame_duration_ms;
+    bool loop;
+    animation_build_frame_t build_frame;
+} animation_source_t;
+```
+
+The display engine then does:
+
+```text
+timer tick
+    |
+    v
+source->build_frame(frame_index, reusable_pixels, width, height)
+    |
+    v
+render led_matrix_image_t using reusable_pixels
+```
+
+Module direction:
+
+- `animation_display_engine`
+  - owns timer/task playback
+  - owns one reusable frame buffer
+  - advances frame index
+  - renders through callback
+- `built_in_animations` or `animation_presets`
+  - procedural scanner, wave, bounce, test patterns
+  - no large frame arrays in RAM
+- `animation_store`
+  - future uploaded animations
+  - stores or streams frame data from RAM/flash/filesystem
+  - exposes the same frame-source interface to the engine
+
+Initial built-in animation ideas:
 
 - blinking
 - moving pixel
+- two-way scanner
 - moving icon
 - rainbow
 - fade
 - animated smiley
 - scrolling text
+
+Planned order:
+
+1. Refactor current scanner from prebuilt frame arrays to procedural `build_frame`.
+2. Keep `/animation` as a built-in demo endpoint for now.
+3. Add one or two more procedural test animations only if useful for diagnostics.
+4. Then design uploaded animations and decide:
+   - raw RGB frames vs compressed/encoded frames
+   - JSON metadata shape
+   - max frame count / max size
+   - storage location
 
 ## Text Rendering
 
@@ -986,15 +1071,12 @@ Future storage:
 
 ## Wi-Fi Animations
 
-Payload idea:
+Future direction:
 
-```text
-frame_count
-frame_delay
-frame1
-frame2
-...
-```
+- Uploaded animations should not require loading every frame into internal DRAM at playback time.
+- The upload format can still contain multiple frames, but playback should expose them through the same `animation_source_t` style interface used by procedural animations.
+- Storage may be RAM for tiny animations, but larger animations should be read from flash/filesystem or decoded one frame at a time.
+- The exact HTTP payload format should be decided after the procedural animation source refactor.
 
 Future ideas:
 

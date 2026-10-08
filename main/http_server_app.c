@@ -345,6 +345,13 @@ static const httpd_uri_t animation_uri = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t animation_options_uri = {
+    .uri = "/animation",
+    .method = HTTP_OPTIONS,
+    .handler = options_handler,
+    .user_ctx = NULL
+};
+
 esp_err_t http_server_app_start(
     uint16_t display_width,
     uint16_t display_height,
@@ -387,6 +394,7 @@ esp_err_t http_server_app_start(
     }
     
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.max_uri_handlers = 12;
     
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &config), TAG, "Failed to start HTTP server");
     esp_err_t err = httpd_register_uri_handler(s_server, &health_check_uri);
@@ -397,12 +405,13 @@ esp_err_t http_server_app_start(
     esp_err_t err6 = httpd_register_uri_handler(s_server, &text_options_uri);
     esp_err_t err7 = httpd_register_uri_handler(s_server, &get_display_uri);
     esp_err_t err8 = httpd_register_uri_handler(s_server, &animation_uri);
+    esp_err_t err9 = httpd_register_uri_handler(s_server, &animation_options_uri);
 
-    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK || err7 != ESP_OK || err8 != ESP_OK) {
+    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK || err7 != ESP_OK || err8 != ESP_OK || err9 != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register URI handler");
         httpd_stop(s_server);
         s_server = NULL;
-        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : (err6 != ESP_OK ? err6 : (err7 != ESP_OK ? err7 : err8))))));
+        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : (err6 != ESP_OK ? err6 : (err7 != ESP_OK ? err7 : (err8 != ESP_OK ? err8 : err9)))))));
     }
     return ESP_OK;
 }

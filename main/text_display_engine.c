@@ -165,7 +165,17 @@ esp_err_t text_display_start(const text_display_config_t *config, text_frame_ren
     if (task_created != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-    ESP_RETURN_ON_ERROR(timer_init(), TAG, "Failed to initialize timer");
+    esp_err_t timer_err = timer_init();
+    if (timer_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize timer: %s", esp_err_to_name(timer_err));
+        s_stop_requested = true;
+        xTaskNotifyGive(s_task_handle);
+        while (s_task_handle != NULL) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        s_stop_requested = false;
+        return timer_err;
+    }
     return ESP_OK;
 }
 

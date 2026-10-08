@@ -67,6 +67,15 @@ static void animation_task(void *arg) {
         }
 
         const led_matrix_image_t *current_frame = &animation->frames[current_frame_index];
+        if (current_frame == NULL) {
+            ESP_LOGE(TAG, "Current frame is NULL");
+            break;
+        }
+
+        if (current_frame->pixels == NULL) {
+            ESP_LOGE(TAG, "Current frame pixels are NULL");
+            break;
+        }
 
         if (current_frame->height > s_display_height || current_frame->width > s_display_width) {
             ESP_LOGE(TAG, "Frame size exceeds display size");
@@ -119,7 +128,17 @@ esp_err_t animation_display_start_borrowed(const animation_t *animation, animati
     if (task_created != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-    ESP_RETURN_ON_ERROR(timer_init(), TAG, "Failed to initialize timer");
+    esp_err_t timer_err = timer_init();
+    if (timer_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize timer: %s", esp_err_to_name(timer_err));
+        s_stop_requested = true;
+        xTaskNotifyGive(s_task_handle);
+        while (s_task_handle != NULL) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        s_stop_requested = false;
+        return timer_err;
+    }
     return ESP_OK;
 }
 
