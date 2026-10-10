@@ -5,9 +5,9 @@
 
 typedef esp_err_t (*animation_frame_renderer_t)(const led_matrix_image_t *frame);
 
-// The animation, its frames, and all pixel buffers must remain valid
-// until animation_display_stop() returns or the animation finishes.
-esp_err_t animation_display_start_borrowed(const animation_t *animation, animation_frame_renderer_t render_frame);
+// animation_source must remain valid until animation_display_stop() returns
+// or the animation finishes.
+esp_err_t animation_display_start_borrowed(const animation_source_t *animation_source, animation_frame_renderer_t render_frame);
 
 esp_err_t animation_display_stop(void);
 

@@ -1,4 +1,5 @@
 #include "animations.h"
+#include "display_config.h"
 #include <stddef.h>
 
 #define OFF ((rgb_t){0, 0, 0})
@@ -8,58 +9,68 @@
 #define TRAIL2 ((rgb_t){0, 20, 50})
 
 #define SCANNER_FRAME_COUNT_MAX 64
-#define DISPLAY_MAX_PIXELS 512
 
-static rgb_t s_pixels[SCANNER_FRAME_COUNT_MAX][DISPLAY_MAX_PIXELS];
-static led_matrix_image_t s_frames[SCANNER_FRAME_COUNT_MAX];
-static animation_t s_animation;
+static animation_source_t s_scanner_animation;
 
-const animation_t *demo_animation(uint16_t width, uint16_t height) {
+static esp_err_t scanner_get_frame(
+    uint16_t frame_index,
+    rgb_t *out_pixels,
+    uint16_t width,
+    uint16_t height
+) {
     if (width == 0 || height == 0 || width * height > DISPLAY_MAX_PIXELS) {
-        return NULL;
+        return ESP_ERR_INVALID_ARG;
     }
-    uint16_t frame_count = width * 2;
-    if (frame_count > SCANNER_FRAME_COUNT_MAX) {
-        frame_count = SCANNER_FRAME_COUNT_MAX;
+
+    if (out_pixels == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
-    for (int i = 0; i < frame_count; i++) {
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                uint32_t index = y * width + x;
-                if (i < width) {
-                    if (x == i) {
-                        s_pixels[i][index] = FRONT;
-                    } else if (i > 0 && x == i - 1) {
-                        s_pixels[i][index] = TRAIL1;
-                    } else if (i > 1 && x == i - 2) {
-                        s_pixels[i][index] = TRAIL2;
-                    } else {
-                        s_pixels[i][index] = OFF;
-                    }
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            uint32_t index = y * width + x;
+            if (frame_index < width) {
+                if (x == frame_index) {
+                    out_pixels[index] = FRONT;
+                } else if (frame_index > 0 && x == frame_index - 1) {
+                    out_pixels[index] = TRAIL1;
+                } else if (frame_index > 1 && x == frame_index - 2) {
+                    out_pixels[index] = TRAIL2;
                 } else {
-                    if (x == width - (i + 1 - width)) {
-                        s_pixels[i][index] = FRONT;
-                    } else if (i > width && x == width - (i - width)) {
-                        s_pixels[i][index] = TRAIL1;
-                    } else if (i > (width + 1) && x == width - (i - 1 - width)) {
-                        s_pixels[i][index] = TRAIL2;
-                    } else {
-                        s_pixels[i][index] = OFF;
-                    }
+                    out_pixels[index] = OFF;
+                }
+            } else {
+                if (x == width - (frame_index + 1 - width)) {
+                    out_pixels[index] = FRONT;
+                } else if (frame_index > width && x == width - (frame_index - width)) {
+                    out_pixels[index] = TRAIL1;
+                } else if (frame_index > (width + 1) && x == width - (frame_index - 1 - width)) {
+                    out_pixels[index] = TRAIL2;
+                } else {
+                    out_pixels[index] = OFF;
                 }
             }
         }
-        s_frames[i] = (led_matrix_image_t){
-            .width = width,
-            .height = height,
-            .pixels = s_pixels[i],
-        };
     }
-    s_animation = (animation_t){
+    return ESP_OK;
+}
+
+const animation_source_t *scanner_animation_create(uint16_t width, uint16_t height) {
+    if (width < 2 || height == 0 || width * height > DISPLAY_MAX_PIXELS) {
+        return NULL;
+    }
+
+    uint16_t frame_count = (width * 2) - 2;
+    if (frame_count > SCANNER_FRAME_COUNT_MAX) {
+        frame_count = SCANNER_FRAME_COUNT_MAX;
+    }
+
+    s_scanner_animation = (animation_source_t){
         .frame_count = frame_count,
         .frame_duration_ms = 100,
-        .frames = s_frames,
         .loop = true,
+        .get_frame = scanner_get_frame,
     };
-    return &s_animation;
+
+    return &s_scanner_animation;
 }

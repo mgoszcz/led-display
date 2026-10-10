@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "display_config.h"
 
 static const char *TAG = "ANIMATION_DISPLAY_ENGINE";
 
@@ -14,7 +15,8 @@ static esp_timer_handle_t s_timer;
 static bool s_stop_requested = false;
 static uint32_t s_frame_duration_ms;
 static animation_frame_renderer_t s_render_frame;
-static const animation_t *s_current_animation = NULL;
+static const animation_source_t *s_current_source = NULL;
+static rgb_t s_frame_pixels[DISPLAY_MAX_PIXELS];
 
 static void timer_callback(void *arg)
 {
@@ -49,8 +51,8 @@ static esp_err_t timer_init() {
 }
 
 static void animation_task(void *arg) {
-    const animation_t *animation = s_current_animation;
-    if (animation == NULL || animation->frames == NULL || animation->frame_count == 0) {
+    const animation_source_t *animation_source = s_current_source;
+    if (animation_source == NULL || animation_source->get_frame == NULL || animation_source->frame_count == 0) {
         ESP_LOGE(TAG, "Invalid animation data");
         s_task_handle = NULL;
         vTaskDelete(NULL);
@@ -66,30 +68,34 @@ static void animation_task(void *arg) {
             break;
         }
 
-        const led_matrix_image_t *current_frame = &animation->frames[current_frame_index];
-        if (current_frame == NULL) {
-            ESP_LOGE(TAG, "Current frame is NULL");
+        esp_err_t frame_err = animation_source->get_frame(
+            current_frame_index,
+            s_frame_pixels,
+            s_display_width,
+            s_display_height
+        );
+
+        if (frame_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to build animation frame %zu: %s",
+                    current_frame_index,
+                    esp_err_to_name(frame_err));
             break;
         }
 
-        if (current_frame->pixels == NULL) {
-            ESP_LOGE(TAG, "Current frame pixels are NULL");
-            break;
-        }
+        const led_matrix_image_t current_frame = {
+            .width = s_display_width,
+            .height = s_display_height,
+            .pixels = s_frame_pixels,
+        };
 
-        if (current_frame->height > s_display_height || current_frame->width > s_display_width) {
-            ESP_LOGE(TAG, "Frame size exceeds display size");
-            break;
-        }
-
-        esp_err_t render_err = s_render_frame(current_frame);
+        esp_err_t render_err = s_render_frame(&current_frame);
         if (render_err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to render frame %zu: %s", current_frame_index, esp_err_to_name(render_err));
             break;
         }
 
-        current_frame_index = (current_frame_index + 1) % animation->frame_count;
-        if (current_frame_index == 0 && !animation->loop) {
+        current_frame_index = (current_frame_index + 1) % animation_source->frame_count;
+        if (current_frame_index == 0 && !animation_source->loop) {
             break;
         }
             
@@ -100,7 +106,7 @@ static void animation_task(void *arg) {
     vTaskDelete(NULL);
 }
 
-esp_err_t animation_display_start_borrowed(const animation_t *animation, animation_frame_renderer_t render_frame) {
+esp_err_t animation_display_start_borrowed(const animation_source_t *animation_source, animation_frame_renderer_t render_frame) {
     if (render_frame == NULL) {
         ESP_LOGE(TAG, "Render frame function cannot be NULL");
         return ESP_ERR_INVALID_ARG;
@@ -109,21 +115,21 @@ esp_err_t animation_display_start_borrowed(const animation_t *animation, animati
         ESP_LOGW(TAG, "Animation display task is already running");
         return ESP_ERR_INVALID_STATE;
     }
-    if (animation == NULL) {
-        ESP_LOGE(TAG, "animation is NULL");
+    if (animation_source == NULL) {
+        ESP_LOGE(TAG, "animation source is NULL");
         return ESP_ERR_INVALID_ARG;
     }
-    if (animation->frames == NULL || animation->frame_count == 0) {
-        ESP_LOGE(TAG, "Animation frames are NULL or frame count is zero");
+    if (animation_source->get_frame == NULL || animation_source->frame_count == 0) {
+        ESP_LOGE(TAG, "Animation get_frame is NULL or frame count is zero");
         return ESP_ERR_INVALID_ARG;
     }
-    if (animation->frame_duration_ms != 0) {
-        s_frame_duration_ms = animation->frame_duration_ms;
+    if (animation_source->frame_duration_ms != 0) {
+        s_frame_duration_ms = animation_source->frame_duration_ms;
     } else {
         s_frame_duration_ms = 100; // Default speed
     }
     s_render_frame = render_frame;
-    s_current_animation = animation;
+    s_current_source = animation_source;
     BaseType_t task_created = xTaskCreate(animation_task, "animation_task", 4096, NULL, 5, &s_task_handle);
     if (task_created != pdPASS) {
         return ESP_ERR_NO_MEM;
@@ -158,6 +164,14 @@ esp_err_t animation_display_stop(void) {
 }
 
 esp_err_t animation_display_init(uint16_t display_width, uint16_t display_height) {
+    if (display_width == 0 || display_height == 0) {
+        ESP_LOGE(TAG, "Display dimensions cannot be zero");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (display_height * display_width > DISPLAY_MAX_PIXELS ) {
+        ESP_LOGE(TAG, "Display size exceeds maximum");
+        return ESP_ERR_INVALID_ARG;
+    }
     s_display_width = display_width;
     s_display_height = display_height;
     return ESP_OK;

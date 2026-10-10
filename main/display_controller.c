@@ -7,10 +7,7 @@
 #include "text_display_engine.h"
 #include "animation_display_engine.h"
 #include "animations.h"
-
-#define DISPLAY_MAX_WIDTH 32
-#define DISPLAY_MAX_HEIGHT 32
-#define DISPLAY_MAX_PIXELS (DISPLAY_MAX_WIDTH * DISPLAY_MAX_HEIGHT)
+#include "display_config.h"
 
 
 static const char *TAG = "DISPLAY_CONTROLLER";
@@ -248,11 +245,11 @@ esp_err_t display_controller_display_demo_animation(void) {
         ESP_LOGE(TAG, "Failed to set display mode: %s", esp_err_to_name(display_mode_err));
         return display_mode_err;
     }
-    const animation_t *animation = demo_animation(s_display_width, s_display_height);
-    if (animation == NULL) {
+    const animation_source_t *animation_source = scanner_animation_create(s_display_width, s_display_height);
+    if (animation_source == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    esp_err_t ret = animation_display_start_borrowed(animation, display_controller_render_image);
+    esp_err_t ret = animation_display_start_borrowed(animation_source, display_controller_render_image);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start animation display: %s", esp_err_to_name(ret));
         return ret;
