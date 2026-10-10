@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include "cJSON.h"
 #include <stdio.h>
+#include "display_config.h"
 
 
 #define TEXT_JSON_MAX_LEN 256
@@ -15,10 +16,12 @@ static http_frame_handler_t s_frame_handler = NULL;
 static http_demo_handler_t s_demo_handler = NULL;
 static http_brightness_handler_t s_brightness_handler = NULL;
 static http_text_handler_t s_text_handler = NULL;
+static http_demo_animation_handler_t s_demo_animation_handler = NULL;
 static http_animation_handler_t s_animation_handler = NULL;
 static uint32_t s_frame_size_bytes;
 static uint16_t s_width;
 static uint16_t s_height;
+static uint8_t s_animation_upload_buffer[UPLOADED_ANIMATION_MAX_PIXELS * 3];
 
 static void set_cors_headers(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -276,12 +279,105 @@ static esp_err_t text_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-esp_err_t animation_handler(httpd_req_t *req) {
+static esp_err_t demo_animation_handler(httpd_req_t *req) {
     set_cors_headers(req);
 
-    esp_err_t err = s_animation_handler();
+    esp_err_t err = s_demo_animation_handler();
     if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to enable animation");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to enable demo animation");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+}
+
+static esp_err_t animation_handler(httpd_req_t *req) {
+    set_cors_headers(req);
+
+    if (req->content_len > UPLOADED_ANIMATION_MAX_PIXELS * 3) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Content length exceeds limits");
+        return ESP_FAIL;
+    }
+    char query[128];
+
+    esp_err_t err = httpd_req_get_url_query_str(req, query, sizeof(query));
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query string");
+        return ESP_FAIL;
+    }
+    char value[16];
+    if (httpd_query_key_value(query, "frames", value, sizeof(value)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing frames parameter");
+        return ESP_FAIL;
+    }
+
+    char *end = NULL;
+    long frames = strtol(value, &end, 10);
+    if (*end != '\0' || frames <= 0 || frames > UPLOADED_ANIMATION_MAX_FRAMES) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid frames parameter");
+        return ESP_FAIL;
+    }
+
+    size_t expected_len = (size_t)frames * s_width * s_height * 3;
+    if (req->content_len != expected_len) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid length");
+        return ESP_FAIL;
+    }
+
+    if (httpd_query_key_value(query, "loop", value, sizeof(value)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing loop parameter");
+        return ESP_FAIL;
+    }
+
+    long loop = strtol(value, &end, 10);
+    if (*end != '\0' || loop < 0 || loop > 1) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid loop parameter");
+        return ESP_FAIL;
+    }
+
+    long speed = 0;
+    if (httpd_query_key_value(query, "speedMs", value, sizeof(value)) == ESP_OK) {
+        speed = strtol(value, &end, 10);
+        if (*end != '\0' || speed < 0 || speed > 5000) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid speedMs parameter");
+            return ESP_FAIL;
+        }
+    }
+
+    size_t received_total = 0;
+
+    while (received_total < req->content_len) {
+        int received = httpd_req_recv(
+            req,
+            (char *)s_animation_upload_buffer + received_total,
+            req->content_len - received_total
+        );
+
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Request timeout");
+            return ESP_FAIL;
+        }
+
+        if (received <= 0) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive request body");
+            return ESP_FAIL;
+        }
+
+        received_total += received;
+    }
+
+    esp_err_t handler_err = s_animation_handler(
+        s_animation_upload_buffer,
+        req->content_len,
+        s_width,
+        s_height,
+        (uint16_t)frames,
+        (uint32_t)speed,
+        (bool)loop
+    );
+    if (handler_err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to handle animation");
         return ESP_FAIL;
     }
 
@@ -345,8 +441,22 @@ static const httpd_uri_t animation_uri = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t demo_animation_uri = {
+    .uri = "/animation/demo",
+    .method = HTTP_POST,
+    .handler = demo_animation_handler,
+    .user_ctx = NULL
+};
+
 static const httpd_uri_t animation_options_uri = {
     .uri = "/animation",
+    .method = HTTP_OPTIONS,
+    .handler = options_handler,
+    .user_ctx = NULL
+};
+
+static const httpd_uri_t demo_animation_options_uri = {
+    .uri = "/animation/demo",
     .method = HTTP_OPTIONS,
     .handler = options_handler,
     .user_ctx = NULL
@@ -359,7 +469,8 @@ esp_err_t http_server_app_start(
     http_demo_handler_t demo_handler,
     http_brightness_handler_t brightness_handler,
     http_text_handler_t text_handler,
-    http_animation_handler_t animation_handler
+    http_animation_handler_t animation_handler,
+    http_demo_animation_handler_t demo_animation_handler
 ) {
     if (frame_handler == NULL) {
         ESP_LOGE(TAG, "Frame handler cannot be NULL");
@@ -381,6 +492,10 @@ esp_err_t http_server_app_start(
         ESP_LOGE(TAG, "Animation handler cannot be NULL");
         return ESP_ERR_INVALID_ARG;
     }
+    if (demo_animation_handler == NULL) {
+        ESP_LOGE(TAG, "Demo animation handler cannot be NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
     s_frame_size_bytes = display_height * display_width * 3;
     s_width = display_width;
     s_height = display_height;
@@ -389,6 +504,7 @@ esp_err_t http_server_app_start(
     s_brightness_handler = brightness_handler;
     s_text_handler = text_handler;
     s_animation_handler = animation_handler;
+    s_demo_animation_handler = demo_animation_handler;
     if (s_server != NULL) {
         return ESP_OK;
     }
@@ -406,12 +522,14 @@ esp_err_t http_server_app_start(
     esp_err_t err7 = httpd_register_uri_handler(s_server, &get_display_uri);
     esp_err_t err8 = httpd_register_uri_handler(s_server, &animation_uri);
     esp_err_t err9 = httpd_register_uri_handler(s_server, &animation_options_uri);
+    esp_err_t err10 = httpd_register_uri_handler(s_server, &demo_animation_uri);
+    esp_err_t err11 = httpd_register_uri_handler(s_server, &demo_animation_options_uri);
 
-    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK || err7 != ESP_OK || err8 != ESP_OK || err9 != ESP_OK) {
+    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK || err7 != ESP_OK || err8 != ESP_OK || err9 != ESP_OK || err10 != ESP_OK || err11 != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register URI handler");
         httpd_stop(s_server);
         s_server = NULL;
-        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : (err6 != ESP_OK ? err6 : (err7 != ESP_OK ? err7 : (err8 != ESP_OK ? err8 : err9)))))));
+        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : (err6 != ESP_OK ? err6 : (err7 != ESP_OK ? err7 : (err8 != ESP_OK ? err8 : (err9 != ESP_OK ? err9 : (err10 != ESP_OK ? err10 : err11)))))))));
     }
     return ESP_OK;
 }

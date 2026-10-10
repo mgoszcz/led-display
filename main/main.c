@@ -30,9 +30,22 @@ static esp_err_t handle_text(const text_display_config_t *config)
     return display_controller_display_text(config);
 }
 
-static esp_err_t handle_animation(void)
+static esp_err_t handle_demo_animation(void)
 {
     return display_controller_display_demo_animation();
+}
+
+static esp_err_t handle_animation(
+    const uint8_t *data,
+    size_t len,
+    uint16_t width,
+    uint16_t height,
+    uint16_t frame_count,
+    uint32_t frame_duration_ms,
+    bool loop
+)
+{
+    return display_controller_display_animation(data, len, width, height, frame_count, frame_duration_ms, loop);
 }
 
 void app_main(void)
@@ -51,7 +64,8 @@ void app_main(void)
         handle_demo_enable,
         handle_brightness,
         handle_text,
-        handle_animation
+        handle_animation,
+        handle_demo_animation
     ));
     
     ESP_ERROR_CHECK(image_store_get("smile", &smile_image));

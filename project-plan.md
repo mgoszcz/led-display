@@ -7,8 +7,8 @@ Your role in this project is a PM and senior developer with a review/advisory ro
 - Board: ESP32-S3
 - Framework: ESP-IDF v5.5.x
 - LEDs: WS2812B RGB LED matrix
-- Current panel: 16x16, 256 LEDs
-- Future panel: two chained 16x16 matrices, combined into 32x16, 512 LEDs
+- Current panel: two chained 16x16 matrices, combined into 32x16, 512 LEDs
+- Supported target layouts: rectangular combinations of 16x16 panels, for example 16x16, 32x16, 16x32, and 32x32
 - LED library: Espressif official `led_strip` component with RMT backend
 - Data GPIO: GPIO4
 - Physical layout:
@@ -42,6 +42,30 @@ Current modules:
   - Keeps cross-module payload structs outside individual infrastructure modules.
   - Current use:
     - text display configuration for HTTP `/text` and text rendering.
+    - animation source contract for procedural and uploaded animations.
+
+- `display_config.h`
+  - Shared compile-time display limits.
+  - Current limits:
+    - max display width/height
+    - max display pixels
+    - max uploaded animation frames/pixels.
+
+- `display_controller.h` / `display_controller.c`
+  - Application display coordinator.
+  - Owns:
+    - framebuffer instance
+    - display mode
+    - render mutex
+    - transition between demo, frame, text, and animation modes
+  - Stops active text/animation tasks when switching modes.
+  - Provides application-facing display operations:
+    - render raw frame
+    - start demo image mode
+    - set brightness and re-render current framebuffer
+    - start scrolling text
+    - start built-in demo animation
+    - start uploaded animation from RGB888 data
 
 - `font_5x7.h` / `font_5x7.c`
   - 5x7 bitmap font module.
@@ -100,10 +124,13 @@ Current modules:
   - Starts ESP-IDF HTTP server.
   - Currently exposes:
     - `GET /health` -> `OK`
+    - `GET /display` -> active display size JSON
     - `POST /frame` -> accepts one full raw RGB888 frame
     - `POST /demo` -> enables demo mode again
     - `POST /brightness` -> sets brightness percent
     - `POST /text` -> starts scrolling text from JSON config
+    - `POST /animation/demo` -> starts built-in scanner animation
+    - `POST /animation` -> accepts uploaded raw RGB888 animation
   - Keeps server handle as static module state.
   - Uses callbacks passed from `main.c` so it does not directly know framebuffer or LED matrix internals.
 
@@ -116,7 +143,31 @@ Current modules:
     - color
     - speed
   - Owns its task/timer lifecycle through start/stop functions.
-  - Currently renders directly through framebuffer and LED matrix; this is acceptable for MVP but should later move behind a display controller.
+  - Renders through a callback supplied by `display_controller`.
+  - Does not directly know HTTP or application endpoints.
+
+- `animation_display_engine.h` / `animation_display_engine.c`
+  - Animation playback module.
+  - Owns:
+    - ESP timer
+    - FreeRTOS playback task
+    - one reusable frame buffer
+  - Uses an `animation_source_t` callback to obtain each frame.
+  - Renders frames through a callback supplied by `display_controller`.
+  - Does not care whether frames are procedural, stored in RAM, or later read from flash.
+
+- `animations.h` / `animations.c`
+  - Built-in animation sources.
+  - Current animation:
+    - two-way scanner
+  - Uses procedural frame generation instead of storing all frames.
+
+- `uploaded_animation_store.h` / `uploaded_animation_store.c`
+  - RAM-backed uploaded animation storage.
+  - Accepts raw RGB888 animation data.
+  - Stores converted `rgb_t` pixels in a static buffer with explicit size limits.
+  - Exposes uploaded animation through the same `animation_source_t` contract used by procedural animations.
+  - Current storage is volatile and disappears after reset.
 
 - `tools/pixel-editor.html`
   - Local browser-based 16x16 pixel editor.
@@ -134,6 +185,7 @@ Current modules:
     - `POST /demo`
     - text display using `POST /text` JSON
   - Verified with the ESP32 device in the current local workflow.
+  - Does not yet provide an animation editor.
 
 - `main/Kconfig.projbuild`
   - Project menuconfig options:
@@ -143,18 +195,16 @@ Current modules:
 
 - `main.c`
   - Current application entry point.
-  - Initializes framebuffer, LED matrix, Wi-Fi, and HTTP server.
+  - Initializes display controller, Wi-Fi, and HTTP server.
   - Looks up predefined images.
   - Runs a simple built-in image demo on startup.
   - Provides HTTP callbacks:
-    - frame upload disables demo mode and renders uploaded frame
-    - demo endpoint enables demo mode again
-    - brightness endpoint updates brightness and re-renders current framebuffer
-    - text endpoint starts/restarts scrolling text
-  - Currently owns simple display mode switching:
-    - demo
-    - frame
-    - text
+    - frame upload delegates to display controller
+    - demo endpoint delegates to display controller
+    - brightness endpoint delegates to display controller
+    - text endpoint delegates to display controller
+    - animation endpoint delegates to display controller
+  - Does not own display mode switching directly anymore.
 
 # Current Render Flow
 
@@ -203,7 +253,7 @@ Current local web editor flow:
 tools/pixel-editor.html
         |
         v
-POST /frame raw RGB888, 768 bytes
+POST /frame raw RGB888, width * height * 3 bytes
         |
         v
 ESP32 HTTP server
@@ -213,6 +263,31 @@ framebuffer
         |
         v
 LED matrix
+```
+
+Current uploaded animation flow:
+
+```text
+POST /animation?frames=N&speedMs=100&loop=1
+body: raw RGB888 frames
+        |
+        v
+http_server_app parses query and receives binary body
+        |
+        v
+display_controller stops current animation/mode as needed
+        |
+        v
+uploaded_animation_store_save_rgb888()
+        |
+        v
+uploaded_animation_store_get_source()
+        |
+        v
+animation_display_engine
+        |
+        v
+framebuffer + LED matrix
 ```
 
 # Completed Milestones
@@ -355,10 +430,13 @@ Current endpoints:
 
 ```text
 GET /health -> OK
+GET /display -> JSON display size
 POST /frame -> raw RGB888 full-frame payload matching configured display size
 POST /demo -> enables startup demo again
 POST /brightness -> brightness percent
 POST /text -> JSON text config
+POST /animation/demo -> built-in scanner animation
+POST /animation -> uploaded raw RGB888 animation
 ```
 
 ## 7. First Interactive Pixel Editor - INITIAL VERSION DONE
@@ -375,7 +453,9 @@ Current behavior:
 - Health check, frame upload, demo trigger, and brightness control have been verified on device.
 - Text display control sends JSON to `POST /text`.
 - The editor separates controls into connection, text display, pixel frame, and device sections.
+- The editor auto-detects display size through `GET /display`.
 - The editor is local only; it is not hosted by ESP32 yet.
+- Animation creation is not implemented in the editor yet.
 
 ## 8. Scrolling Text - INITIAL VERSION DONE
 
@@ -404,7 +484,68 @@ Current limitations:
 - ASCII-oriented 5x7 font only.
 - Text length is capped.
 - Color and speed are per text run, not dynamic during a run.
-- Text engine currently renders directly. Later this should go through a display controller or render owner.
+- Text engine renders through a callback supplied by the display controller.
+
+## 9. Display Controller - INITIAL VERSION DONE
+
+Current behavior:
+
+- Owns the active display mode:
+  - demo
+  - frame
+  - text
+  - animation
+- Owns shared framebuffer/render access through a mutex.
+- Stops text or animation task when switching away from those modes.
+- Keeps HTTP, main loop, text engine, and animation engine away from direct framebuffer ownership.
+- Re-renders current framebuffer after brightness changes.
+
+This completes the first important architecture cleanup: rendering is no longer freely touched by every endpoint/module.
+
+## 10. Animations - MVP DONE
+
+Current behavior:
+
+- Built-in procedural scanner animation works through:
+
+```text
+POST /animation/demo
+```
+
+- Uploaded animation works through:
+
+```text
+POST /animation?frames=N&speedMs=MS&loop=0|1
+Content-Type: application/octet-stream
+body: raw RGB888 frames
+```
+
+- Each frame must match the active display size.
+- For 32x16:
+
+```text
+bytes_per_frame = 32 * 16 * 3 = 1536
+total_body_len = frames * 1536
+```
+
+- Uploaded animation storage is RAM-backed and limited by:
+
+```text
+UPLOADED_ANIMATION_MAX_FRAMES
+UPLOADED_ANIMATION_MAX_PIXELS
+```
+
+- `animation_display_engine` owns one reusable frame buffer and pulls frames from `animation_source_t`.
+- `animations.c` provides procedural built-in animation sources.
+- `uploaded_animation_store.c` exposes uploaded RGB888 animations through the same `animation_source_t` contract.
+
+Tested:
+
+- Demo scanner animation.
+- Uploaded raw RGB888 animation.
+- Invalid/missing query parameter handling.
+- Raw frame upload still works.
+- Generated binary test frame and generated binary walking-person animation work on device.
 
 # Current Near-Term Architecture
 
@@ -417,42 +558,53 @@ HTTP /text        -> DISPLAY_MODE_TEXT  -> text task/timer renders scrolling tex
 HTTP /brightness  -> update brightness  -> re-render current framebuffer
 ```
 
-For MVP, mode switching remains in `main.c`.
-The next architectural cleanup should be a small display controller or render owner so only one task owns framebuffer/render operations.
+Mode switching now belongs to `display_controller`.
+HTTP callbacks in `main.c` should remain thin adapters.
+Future work should continue moving toward a single display/render owner task if concurrency becomes more complex.
 
 # Next Milestone
 
-Refactor animations toward frame sources instead of storing every frame in RAM:
+The original short-term project scope is now effectively met:
+
+- draw a 16x16/32x16 image in a browser tool
+- send it to the ESP32 over Wi-Fi
+- show it on the LED matrix
+- display built-in images
+- display scrolling text
+- run procedural animation
+- upload and play simple raw RGB888 animations
+
+The next milestone should focus on making animation creation usable from the existing browser tooling:
 
 ```text
-Browser pixel editor / text controls
+tools/pixel-editor.html
         |
         v
-ESP32 HTTP endpoints
+animation timeline / frame editor
         |
         v
-framebuffer / text engine
+POST /animation raw RGB888 frames
         |
         v
-LED matrix render
+ESP32 animation playback
 ```
-
-Current animation MVP status:
-
-- `/animation` endpoint: DONE
-- demo scanner animation: DONE
-- mode switching between animation, frame, text, and demo: DONE
-- CORS `OPTIONS` for `/animation`: DONE
 
 Suggested next steps:
 
-1. Keep using the local HTML editor during development. Hosting the UI from ESP32 is useful later, but does not unblock display features now.
-2. Refactor animation playback so the engine owns one frame buffer and asks an animation source to build/load the next frame.
-3. Move built-in animations, such as the scanner, to procedural frame generation.
-4. After procedural/built-in animations are clean, design uploaded/stored animations:
-   - HTTP upload format
-   - frame storage
-   - playback from RAM, flash, or filesystem
+1. Add animation editing to `tools/pixel-editor.html`:
+   - frame timeline
+   - duplicate frame
+   - add/delete frame
+   - preview animation in browser
+   - send animation to `POST /animation`
+   - export/import animation document JSON
+2. Keep `/animation` render payload as raw RGB888.
+3. Define a separate editable animation document format for the browser, similar to `led-image`.
+4. Decide whether to host the editor directly from ESP32.
+5. If hosting from ESP32, choose how to serve static files:
+   - embedded binary asset
+   - SPIFFS/LittleFS
+   - minimal generated HTML/CSS/JS bundle
 
 # Known Issues For Future
 
@@ -465,29 +617,25 @@ These are known improvement areas. They are not all blockers for the next small 
 - `wifi_app` has no stop/deinit function yet. Add only when lifecycle requires it.
 - `http_server_app` has no stop function yet. Add `http_server_app_stop()` when needed.
 - HTTP server CORS support is minimal. Current endpoints work with simple browser requests, but future custom headers may require `OPTIONS` handling.
-- JSON endpoints such as `/text` can trigger browser preflight requests because of `Content-Type: application/json`. Add proper `OPTIONS` handling and CORS headers for JSON endpoints.
+- JSON endpoints such as `/text` can trigger browser preflight requests because of `Content-Type: application/json`. Current CORS support works for the local editor, but future headers/auth may require broader `OPTIONS` handling.
 - `led_matrix` should eventually validate that it has been initialized before public operations.
 - Consider returning `esp_err_t` from `led_matrix_set_brightness()`.
 - Keep public API argument validation consistent across all modules.
 - Decide later whether off-screen drawing should fail or clip. Current framebuffer image drawing requires the image to fit.
 - `framebuffer_draw_rgb888()` currently supports only full-frame payloads. That is intentional for the first HTTP MVP.
-- Display dimensions are now configurable in firmware at compile time, and the editor can be manually switched between supported sizes. Next step: expose the active size through `GET /display`.
-- Storing all animation frames as `rgb_t frames[frame_count][pixel_count]` can quickly overflow internal DRAM. Procedural/built-in animations should generate one frame at a time. Uploaded/stored animations need explicit size limits and probably flash/filesystem storage.
-- Demo/application mode is currently simple shared state in `main.c`. This is acceptable for MVP, but should become a small app-state module, display controller, or event-driven flow later.
-- Rendering can currently be initiated by more than one context:
-  - main demo loop
-  - HTTP callbacks
-  - text display task
-  - brightness callback re-render
-  This can potentially race around shared framebuffer/LED rendering. A rare ESP hang/reset was observed once while changing brightness during scrolling text. It did not reproduce immediately, but the likely future fix is a mutex around framebuffer/render operations or, better, a single display/render owner task.
+- Display dimensions are configurable in firmware at compile time and exposed through `GET /display`.
+- Uploaded animations are currently stored in RAM only and disappear after reset.
+- Uploaded animation size is intentionally capped. Larger/persistent animations should use flash/filesystem storage later.
+- Display controller now protects framebuffer/render operations with a mutex. A future single display/render owner task may still be cleaner if more input sources or long-running effects are added.
 - Decide whether `led_matrix_set_brightness()` should store brightness as percent or raw 0-255 internally. Current API direction is percent from HTTP/UI.
 - Automatic brightness based on ambient light is a future hardware/software feature, likely using a photoresistor or light sensor.
 - `tools/pixel-editor.html` is not hosted by ESP32 yet.
+- `tools/pixel-editor.html` does not yet include animation editing.
 - Local editor save/load currently uses one browser local storage slot only. Multiple named drawings are future work.
 - Current `/frame` endpoint accepts only full-frame raw RGB888 payloads matching the configured display size. Partial updates or single-pixel control are future work.
 - `led-image` is currently an editor/document format, not a device render format. Keep `/frame` raw RGB888 for live rendering.
 - Photo/image conversion currently supports browser-side fit/crop into the selected grid size. More advanced controls such as gamma correction, contrast, dithering, and palette reduction are future work.
-- Text rendering exists as an MVP, but it currently owns its own timer/task and renders directly. Later it should feed frames/events into a display controller.
+- Text rendering exists as an MVP and renders through display controller callback, but it still owns its own timer/task. Later it may feed frames/events into a central render task.
 - `sdkconfig` may contain Wi-Fi credentials. It is ignored by git now; keep it that way unless credentials are removed.
 
 # Future Roadmap
@@ -634,13 +782,18 @@ Preferred order:
 6. Add device-side brightness control. DONE
 7. Add manual display size selection for 16x16, 32x16, 16x32, and 32x32. DONE
 8. Add `GET /display` and auto-select the editor grid size from the device.
-9. Later host the web UI directly from ESP32.
+9. Add animation editor/timeline.
+10. Later host the web UI directly from ESP32.
 
 Potential next editor features:
 
 - Export/import `led-image` JSON. DONE
 - Import PNG/JPEG/WebP/GIF and convert to grid pixels. DONE
 - Send scrolling text with color and speed. DONE
+- Create multi-frame animations. NEXT
+- Preview animation in browser before sending.
+- Export/import `led-animation` JSON.
+- Send raw RGB888 animation payload to `POST /animation`.
 - Export C array for built-in firmware images.
 - Save recent IP address in browser local storage.
 - Preview sent payload brightness separately from editing colors.
@@ -761,13 +914,17 @@ LED strip
 
 ## Animations
 
-Current MVP:
+Current status:
 
-- `POST /animation` starts a built-in demo scanner animation.
-- The animation path is:
+- `POST /animation/demo` starts a built-in demo scanner animation.
+- `POST /animation` accepts uploaded raw RGB888 animation data.
+- Built-in and uploaded animations both expose frames through `animation_source_t`.
+- `animation_display_engine` owns one reusable frame buffer and asks the active source for the current frame.
+
+Built-in demo animation path:
 
 ```text
-HTTP /animation
+HTTP /animation/demo
         |
         v
 display_controller
@@ -782,43 +939,25 @@ render callback
 framebuffer + LED matrix
 ```
 
-Important RAM lesson:
-
-- A full frame for `32x32` is `1024 * sizeof(rgb_t)`.
-- Holding many frames as `static rgb_t frame_pixels[frame_count][DISPLAY_MAX_PIXELS]` quickly consumes internal DRAM.
-- Built-in procedural animations should not store every generated frame.
-- The engine should eventually keep one reusable frame buffer and ask an animation source to produce/copy/decode the current frame.
-
-Preferred next architecture:
-
-```c
-typedef esp_err_t (*animation_build_frame_t)(
-    uint16_t frame_index,
-    rgb_t *out_pixels,
-    uint16_t width,
-    uint16_t height
-);
-
-typedef struct {
-    uint16_t width;
-    uint16_t height;
-    uint16_t frame_count;
-    uint32_t frame_duration_ms;
-    bool loop;
-    animation_build_frame_t build_frame;
-} animation_source_t;
-```
-
-The display engine then does:
+Uploaded animation path:
 
 ```text
-timer tick
-    |
-    v
-source->build_frame(frame_index, reusable_pixels, width, height)
-    |
-    v
-render led_matrix_image_t using reusable_pixels
+HTTP /animation?frames=N&speedMs=MS&loop=0|1
+        |
+        v
+http_server_app receives raw RGB888 body
+        |
+        v
+display_controller stops current animation if needed
+        |
+        v
+uploaded_animation_store
+        |
+        v
+animation_display_engine
+        |
+        v
+framebuffer + LED matrix
 ```
 
 Module direction:
@@ -828,15 +967,21 @@ Module direction:
   - owns one reusable frame buffer
   - advances frame index
   - renders through callback
-- `built_in_animations` or `animation_presets`
+- `animations`
   - procedural scanner, wave, bounce, test patterns
   - no large frame arrays in RAM
-- `animation_store`
-  - future uploaded animations
-  - stores or streams frame data from RAM/flash/filesystem
+- `uploaded_animation_store`
+  - stores uploaded frames in RAM for MVP
   - exposes the same frame-source interface to the engine
 
-Initial built-in animation ideas:
+Current limits:
+
+- Uploaded animation storage is volatile RAM.
+- Frame count is capped by `UPLOADED_ANIMATION_MAX_FRAMES`.
+- Each uploaded frame must match the active display size.
+- For larger/persistent animations, move storage to flash/filesystem or stream/decode one frame at a time.
+
+Future built-in animation ideas:
 
 - blinking
 - moving pixel
@@ -845,18 +990,19 @@ Initial built-in animation ideas:
 - rainbow
 - fade
 - animated smiley
-- scrolling text
+- scrolling text as a unified animation source
 
 Planned order:
 
-1. Refactor current scanner from prebuilt frame arrays to procedural `build_frame`.
-2. Keep `/animation` as a built-in demo endpoint for now.
-3. Add one or two more procedural test animations only if useful for diagnostics.
-4. Then design uploaded animations and decide:
-   - raw RGB frames vs compressed/encoded frames
-   - JSON metadata shape
-   - max frame count / max size
-   - storage location
+1. Build animation creation into `tools/pixel-editor.html`.
+2. Define editable `led-animation` JSON for save/load/export/import.
+3. Keep live upload format as raw RGB888 for ESP simplicity.
+4. Decide whether to host the HTML editor on ESP32.
+5. Later decide persistent animation storage:
+   - RAM only
+   - LittleFS/SPIFFS
+   - compressed custom format
+   - GIF or other imported formats converted in browser
 
 ## Text Rendering
 
@@ -1047,7 +1193,8 @@ Tasks:
 - Extend and verify `xy_to_index()`. DONE
 - Handle two chained panels. DONE for fixed row-major panel order.
 - Test text rendering on 32x16 hardware. DONE
-- Test `/frame` from the pixel editor on 32x16 hardware. NEXT
+- Test `/frame` from the pixel editor on 32x16 hardware. DONE
+- Test uploaded `/animation` on 32x16 hardware. DONE
 - Test all four corners.
 - Verify orientation and serpentine behavior.
 
@@ -1074,15 +1221,54 @@ Future storage:
 Future direction:
 
 - Uploaded animations should not require loading every frame into internal DRAM at playback time.
-- The upload format can still contain multiple frames, but playback should expose them through the same `animation_source_t` style interface used by procedural animations.
-- Storage may be RAM for tiny animations, but larger animations should be read from flash/filesystem or decoded one frame at a time.
-- The exact HTTP payload format should be decided after the procedural animation source refactor.
+- Current live upload format is raw RGB888 frames with metadata in query params:
+
+```text
+POST /animation?frames=N&speedMs=MS&loop=0|1
+Content-Type: application/octet-stream
+body: [frame0][frame1]...[frameN]
+```
+
+- Playback exposes uploaded data through the same `animation_source_t` interface used by procedural animations.
+- Storage is RAM for the current MVP.
+- Larger or persistent animations should be read from flash/filesystem or decoded one frame at a time.
+- Browser-side tools should own complex conversions such as GIF/image/video-to-frames for now.
 
 Future ideas:
 
 - Save animations to flash.
-- Web UI.
+- Web UI hosted from ESP32.
 - Animation library.
+
+## Hosting The Web UI On ESP32
+
+Current status:
+
+- `tools/pixel-editor.html` is a local file opened from the development machine.
+- This is effective during development and avoids ESP flash/filesystem setup.
+
+Why hosting on ESP32 is worth considering next:
+
+- The device becomes self-contained.
+- User connects to ESP32 IP and opens the editor directly.
+- Easier product-like workflow, especially once animation editing exists.
+
+Possible approaches:
+
+1. Embed minified HTML/CSS/JS into firmware as a static string or binary blob.
+   - simplest deployment
+   - rebuild firmware to update UI
+2. Serve files from LittleFS/SPIFFS.
+   - easier UI updates
+   - requires partition/filesystem setup
+3. Keep local HTML during active development, then package/host later.
+   - fastest iteration
+   - best current choice until animation editor stabilizes
+
+Recommendation:
+
+- Build animation editing locally first.
+- Once the UI shape stabilizes, move toward hosting it from ESP32.
 
 # Stretch Goals
 

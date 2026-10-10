@@ -8,6 +8,7 @@
 #include "animation_display_engine.h"
 #include "animations.h"
 #include "display_config.h"
+#include "uploaded_animation_store.h"
 
 
 static const char *TAG = "DISPLAY_CONTROLLER";
@@ -246,6 +247,44 @@ esp_err_t display_controller_display_demo_animation(void) {
         return display_mode_err;
     }
     const animation_source_t *animation_source = scanner_animation_create(s_display_width, s_display_height);
+    if (animation_source == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t ret = animation_display_start_borrowed(animation_source, display_controller_render_image);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start animation display: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    return ESP_OK;
+}
+
+esp_err_t display_controller_display_animation(
+    const uint8_t *data,
+    size_t len,
+    uint16_t width,
+    uint16_t height,
+    uint16_t frame_count,
+    uint32_t frame_duration_ms,
+    bool loop
+) {
+    if (animation_is_running()) {
+        ESP_LOGW(TAG, "Animation task is already running. Stopping it first.");
+        esp_err_t err = animation_display_stop();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to stop existing animation display task: %s", esp_err_to_name(err));
+            return err;
+        }
+    }
+    esp_err_t display_mode_err = display_controller_set_mode(DISPLAY_MODE_ANIMATION);
+    if (display_mode_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set display mode: %s", esp_err_to_name(display_mode_err));
+        return display_mode_err;
+    }
+    esp_err_t save_err = uploaded_animation_store_save_rgb888(data, len, width, height, frame_count, frame_duration_ms, loop);
+    if (save_err != ESP_OK) {
+        return save_err;
+    }
+    const animation_source_t *animation_source = uploaded_animation_store_get_source();
     if (animation_source == NULL) {
         return ESP_ERR_INVALID_ARG;
     }

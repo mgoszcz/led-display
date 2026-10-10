@@ -2,6 +2,9 @@
 #include "esp_err.h"
 #include "graphics_types.h"
 #include "display_types.h"
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
 
 typedef enum {
     DISPLAY_MODE_IDLE,
@@ -19,3 +22,12 @@ esp_err_t display_controller_display_text(const text_display_config_t *config);
 esp_err_t display_controller_display_demo_image(const led_matrix_image_t *image);
 esp_err_t display_controller_display_demo_animation(void);
 display_mode_t display_controller_get_mode(void);
+esp_err_t display_controller_display_animation(
+    const uint8_t *data,
+    size_t len,
+    uint16_t width,
+    uint16_t height,
+    uint16_t frame_count,
+    uint32_t frame_duration_ms,
+    bool loop
+);
