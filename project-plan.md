@@ -170,10 +170,11 @@ Current modules:
   - Current storage is volatile and disappears after reset.
 
 - `tools/pixel-editor.html`
-  - Local browser-based 16x16 pixel editor.
+  - Local browser-based pixel and animation editor.
   - Supports:
     - ESP32 IP input
     - `GET /health` check
+    - auto-detecting display size through `GET /display`
     - drawing pixels with selected color
     - right-click erase
     - clear grid
@@ -184,8 +185,14 @@ Current modules:
     - `POST /frame`
     - `POST /demo`
     - text display using `POST /text` JSON
+    - animation frame editing
+    - duplicate/add/delete animation frames
+    - browser-side animation preview
+    - export/import `led-animation` JSON file
+    - upload raw RGB888 animations through `POST /animation`
+    - rectangular pixel selection and shifting selected pixels inside a frame
   - Verified with the ESP32 device in the current local workflow.
-  - Does not yet provide an animation editor.
+  - Not hosted by ESP32 yet.
 
 - `main/Kconfig.projbuild`
   - Project menuconfig options:
@@ -454,8 +461,11 @@ Current behavior:
 - Text display control sends JSON to `POST /text`.
 - The editor separates controls into connection, text display, pixel frame, and device sections.
 - The editor auto-detects display size through `GET /display`.
+- The editor can create simple multi-frame animations.
+- The editor can add, duplicate, delete, preview, export, import, and send animations.
+- Animation upload uses raw RGB888 frames sent to `POST /animation`.
+- The editor has a simple selection mode for moving part of a frame without moving the whole frame.
 - The editor is local only; it is not hosted by ESP32 yet.
-- Animation creation is not implemented in the editor yet.
 
 ## 8. Scrolling Text - INITIAL VERSION DONE
 
@@ -574,37 +584,45 @@ The original short-term project scope is now effectively met:
 - run procedural animation
 - upload and play simple raw RGB888 animations
 
-The next milestone should focus on making animation creation usable from the existing browser tooling:
+The next milestone should focus on turning the current local browser tooling into a device-hosted web UI:
 
 ```text
-tools/pixel-editor.html
+ESP32 HTTP server
         |
         v
-animation timeline / frame editor
+serves web UI
         |
         v
-POST /animation raw RGB888 frames
+same REST endpoints
         |
         v
-ESP32 animation playback
+display controller / playback
 ```
 
 Suggested next steps:
 
-1. Add animation editing to `tools/pixel-editor.html`:
-   - frame timeline
-   - duplicate frame
-   - add/delete frame
-   - preview animation in browser
-   - send animation to `POST /animation`
-   - export/import animation document JSON
-2. Keep `/animation` render payload as raw RGB888.
-3. Define a separate editable animation document format for the browser, similar to `led-image`.
-4. Decide whether to host the editor directly from ESP32.
-5. If hosting from ESP32, choose how to serve static files:
+1. Add device discovery through mDNS:
+   - preferred hostname: `led-display.local`
+   - keep IP logging as fallback
+2. Choose how to serve web UI static files:
    - embedded binary asset
    - SPIFFS/LittleFS
    - minimal generated HTML/CSS/JS bundle
+3. Split the current local editor into web app assets:
+   - `index.html`
+   - `style.css`
+   - `app.js`
+4. Redesign the UI into mode-oriented views:
+   - home dashboard with tiles
+   - frame editor
+   - text display
+   - animation editor
+   - settings
+5. Keep REST API as the communication boundary between UI and firmware logic.
+6. Plan Wi-Fi provisioning:
+   - use saved credentials from NVS when available
+   - fall back to setup AP when credentials are missing or connection fails
+   - provide a settings/provisioning page for SSID/password
 
 # Known Issues For Future
 
@@ -630,7 +648,10 @@ These are known improvement areas. They are not all blockers for the next small 
 - Decide whether `led_matrix_set_brightness()` should store brightness as percent or raw 0-255 internally. Current API direction is percent from HTTP/UI.
 - Automatic brightness based on ambient light is a future hardware/software feature, likely using a photoresistor or light sensor.
 - `tools/pixel-editor.html` is not hosted by ESP32 yet.
-- `tools/pixel-editor.html` does not yet include animation editing.
+- mDNS is not implemented yet. The current local editor still needs direct IP input unless the user knows the device IP.
+- Wi-Fi credentials are currently configured through Kconfig / `sdkconfig`; runtime Wi-Fi provisioning is not implemented yet.
+- Future ESP-hosted UI should continue using REST endpoints instead of directly coupling frontend routes to display internals.
+- Current editor UI is a development tool layout, not a product/mobile-friendly layout.
 - Local editor save/load currently uses one browser local storage slot only. Multiple named drawings are future work.
 - Current `/frame` endpoint accepts only full-frame raw RGB888 payloads matching the configured display size. Partial updates or single-pixel control are future work.
 - `led-image` is currently an editor/document format, not a device render format. Keep `/frame` raw RGB888 for live rendering.
@@ -781,19 +802,21 @@ Preferred order:
 5. Add simple save/load/export for drawings. DONE
 6. Add device-side brightness control. DONE
 7. Add manual display size selection for 16x16, 32x16, 16x32, and 32x32. DONE
-8. Add `GET /display` and auto-select the editor grid size from the device.
-9. Add animation editor/timeline.
-10. Later host the web UI directly from ESP32.
+8. Add `GET /display` and auto-select the editor grid size from the device. DONE
+9. Add animation editor/timeline. DONE
+10. Add selection-based partial frame shifting. DONE
+11. Later host the web UI directly from ESP32.
 
 Potential next editor features:
 
 - Export/import `led-image` JSON. DONE
 - Import PNG/JPEG/WebP/GIF and convert to grid pixels. DONE
 - Send scrolling text with color and speed. DONE
-- Create multi-frame animations. NEXT
-- Preview animation in browser before sending.
-- Export/import `led-animation` JSON.
-- Send raw RGB888 animation payload to `POST /animation`.
+- Create multi-frame animations. DONE
+- Preview animation in browser before sending. DONE
+- Export/import `led-animation` JSON. DONE
+- Send raw RGB888 animation payload to `POST /animation`. DONE
+- Select and shift a rectangular part of a frame. DONE
 - Export C array for built-in firmware images.
 - Save recent IP address in browser local storage.
 - Preview sent payload brightness separately from editing colors.
@@ -994,10 +1017,10 @@ Future built-in animation ideas:
 
 Planned order:
 
-1. Build animation creation into `tools/pixel-editor.html`.
-2. Define editable `led-animation` JSON for save/load/export/import.
-3. Keep live upload format as raw RGB888 for ESP simplicity.
-4. Decide whether to host the HTML editor on ESP32.
+1. Build animation creation into `tools/pixel-editor.html`. DONE
+2. Define editable `led-animation` JSON for save/load/export/import. DONE
+3. Keep live upload format as raw RGB888 for ESP simplicity. DONE
+4. Decide how to host the HTML editor on ESP32.
 5. Later decide persistent animation storage:
    - RAM only
    - LittleFS/SPIFFS
@@ -1246,12 +1269,87 @@ Current status:
 
 - `tools/pixel-editor.html` is a local file opened from the development machine.
 - This is effective during development and avoids ESP flash/filesystem setup.
+- The current editor has grown into a development tool covering frame, text, brightness, and animation workflows.
 
 Why hosting on ESP32 is worth considering next:
 
 - The device becomes self-contained.
 - User connects to ESP32 IP and opens the editor directly.
 - Easier product-like workflow, especially once animation editing exists.
+- The browser page and REST API share the same origin, so CORS becomes unnecessary for normal use.
+
+Discovery direction:
+
+- Add mDNS so the device can be opened as:
+
+```text
+http://led-display.local
+```
+
+- Keep IP address logging as a fallback.
+- Optionally display the IP address or setup hint on the matrix later.
+- Router-level DNS should not be required for the normal flow.
+- On some Windows setups, `.local` discovery may depend on system mDNS support, so direct IP should remain a fallback.
+
+Wi-Fi provisioning direction:
+
+1. On startup, read saved Wi-Fi credentials from NVS.
+2. If credentials exist, try STA mode.
+3. If credentials are missing or connection fails, start a setup access point:
+
+```text
+SSID: LED-Display-Setup
+```
+
+4. Serve a small setup/settings page from the ESP32.
+5. User enters target SSID/password.
+6. Device stores credentials in NVS and reconnects in STA mode.
+
+This should replace the current Kconfig-only Wi-Fi credential flow later. Kconfig credentials can remain useful during development.
+
+REST API direction:
+
+- Keep REST endpoints as the boundary between frontend and firmware logic.
+- ESP-hosted UI should call the same endpoints already used by the local editor:
+
+```text
+GET /display
+GET /health
+POST /frame
+POST /text
+POST /animation
+POST /brightness
+POST /demo
+POST /animation/demo
+```
+
+- Hosting the UI on ESP32 should not require moving rendering logic into frontend-specific handlers.
+
+Product UI direction:
+
+- Replace the current tool-like single-page layout with a mode dashboard.
+- First screen should show tiles/cards for:
+  - Frame
+  - Text
+  - Animation
+  - Demo
+  - Settings
+- Each tile opens a focused view.
+- The layout should become more mobile-friendly when moved to ESP32.
+
+Static asset direction:
+
+- The UI does not need to be a single HTML file.
+- Preferred source layout:
+
+```text
+web/
+  index.html
+  style.css
+  app.js
+```
+
+- ESP32 can serve these as embedded files or from a flash filesystem.
 
 Possible approaches:
 
@@ -1267,8 +1365,11 @@ Possible approaches:
 
 Recommendation:
 
-- Build animation editing locally first.
-- Once the UI shape stabilizes, move toward hosting it from ESP32.
+- Start with embedded static files unless filesystem-based UI updates become important immediately.
+- Keep local HTML during active development if it speeds iteration.
+- Move toward `web/index.html`, `web/style.css`, and `web/app.js` before embedding/serving.
+- Add mDNS before or alongside hosting so the user can open the UI without checking UART logs for IP.
+- Treat Wi-Fi provisioning as the next product-quality step after basic hosted UI works.
 
 # Stretch Goals
 
