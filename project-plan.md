@@ -113,11 +113,31 @@ Current modules:
 
 - `wifi_app.h` / `wifi_app.c`
   - Wi-Fi infrastructure module.
-  - Starts Wi-Fi in station mode.
-  - Uses project configuration from Kconfig / `sdkconfig`.
+  - Reads credentials from NVS and starts STA, or setup AP when credentials are missing.
+  - Falls back to AP after exhausted retries or immediate connection-start failure.
+  - Tracks stopped, connecting, connected, disconnected, and setup states.
   - Initializes NVS, netif, event loop, default STA interface, Wi-Fi driver, and connection.
   - Handles Wi-Fi disconnect reconnect attempts and logs IP on `IP_EVENT_STA_GOT_IP`.
   - Should not know about framebuffer, LED matrix, images, or HTTP endpoints.
+
+- `wifi_config_store.h` / `wifi_config_store.c`
+  - Stores SSID/password in the `wifi_config` NVS namespace.
+  - Provides init, load, save, and clear operations.
+  - NVS flash initialization/recovery belongs to `wifi_app`; store init opens its namespace afterwards.
+  - Missing keys return `ESP_ERR_NVS_NOT_FOUND`; an existing empty password means an open network.
+  - Save/clear exist but are not connected to runtime provisioning endpoints yet.
+
+- `network_discovery.h` / `network_discovery.c`
+  - Starts mDNS and advertises HTTP on port 80.
+  - `http://led-display.local` verified on device.
+
+- `web/index.html`, `web/style.css`, `web/app.js`
+  - Embedded in firmware via `EMBED_FILES` and served at `/`, `/style.css`, `/app.js`.
+  - Same-origin REST requests; no IP input or CHECK button.
+  - Fetches `/display` once on startup.
+  - Tile dashboard with Frame, Text, Animation, Demo, Settings and BACK navigation.
+  - Separate frame/animation editing state, touch drawing, explicit Draw/Erase/Select tools.
+  - Hosted UI and navigation verified on device; legacy local editor remains in `tools/`.
 
 - `http_server_app.h` / `http_server_app.c`
   - HTTP infrastructure module.
@@ -196,9 +216,8 @@ Current modules:
 
 - `main/Kconfig.projbuild`
   - Project menuconfig options:
-    - Wi-Fi SSID
-    - Wi-Fi password
     - Wi-Fi maximum retry count
+  - SSID/password options removed; credentials now come from NVS.
 
 - `main.c`
   - Current application entry point.
@@ -404,8 +423,8 @@ Current behavior:
 
 Current behavior:
 
-- Uses STA mode.
-- Wi-Fi settings are configured through Kconfig / `sdkconfig`.
+- Uses STA mode with a secured setup AP fallback.
+- Wi-Fi credentials are loaded from NVS; Kconfig keeps only the retry limit.
 - Initializes NVS with recovery for `ESP_ERR_NVS_NO_FREE_PAGES` and `ESP_ERR_NVS_NEW_VERSION_FOUND`.
 - Registers Wi-Fi and IP event handlers.
 - Retries Wi-Fi connection up to configured retry count.
@@ -414,8 +433,6 @@ Current behavior:
 Current config options:
 
 ```text
-CONFIG_WIFI_SSID
-CONFIG_WIFI_PASSWORD
 CONFIG_WIFI_MAX_RETRY
 ```
 
@@ -465,7 +482,7 @@ Current behavior:
 - The editor can add, duplicate, delete, preview, export, import, and send animations.
 - Animation upload uses raw RGB888 frames sent to `POST /animation`.
 - The editor has a simple selection mode for moving part of a frame without moving the whole frame.
-- The editor is local only; it is not hosted by ESP32 yet.
+- Legacy local editor remains in `tools/`; the active UI is hosted from embedded `web/` assets.
 
 ## 8. Scrolling Text - INITIAL VERSION DONE
 
@@ -584,7 +601,7 @@ The original short-term project scope is now effectively met:
 - run procedural animation
 - upload and play simple raw RGB888 animations
 
-The next milestone should focus on turning the current local browser tooling into a device-hosted web UI:
+Device-hosted UI and mDNS are implemented and verified. The next milestone is completing runtime Wi-Fi provisioning:
 
 ```text
 ESP32 HTTP server
@@ -599,30 +616,26 @@ same REST endpoints
 display controller / playback
 ```
 
-Suggested next steps:
+Completed in this stage:
 
-1. Add device discovery through mDNS:
-   - preferred hostname: `led-display.local`
-   - keep IP logging as fallback
-2. Choose how to serve web UI static files:
-   - embedded binary asset
-   - SPIFFS/LittleFS
-   - minimal generated HTML/CSS/JS bundle
-3. Split the current local editor into web app assets:
-   - `index.html`
-   - `style.css`
-   - `app.js`
-4. Redesign the UI into mode-oriented views:
-   - home dashboard with tiles
-   - frame editor
-   - text display
-   - animation editor
-   - settings
-5. Keep REST API as the communication boundary between UI and firmware logic.
-6. Plan Wi-Fi provisioning:
-   - use saved credentials from NVS when available
-   - fall back to setup AP when credentials are missing or connection fails
-   - provide a settings/provisioning page for SSID/password
+- mDNS, embedded HTML/CSS/JS, relative API requests, startup display-size detection.
+- Tile dashboard, focused views, mobile drawing tools, BACK navigation.
+- STA/AP state handling and fallback after connection failures.
+- Tested on device: empty SSID starts AP; incorrect credentials exhaust retries then start AP; correct credentials connect through STA (tested before migration to NVS).
+- NVS store implementation and startup load integration; startup with missing saved credentials verified.
+- SSID/password removed from Kconfig; retry limit retained.
+
+Next steps, in order:
+
+1. Add `wifi_app_connect(ssid, password)` with validation, owned copies of request data, and asynchronous connection initiation.
+2. Keep setup AP available while testing credentials using AP+STA; distinguish intentional disconnects from failed attempts.
+3. Track pending credentials and save them to NVS only after `IP_EVENT_STA_GOT_IP`. A failed trial must preserve existing saved credentials.
+4. Add proposed REST contract: `POST /wifi` to start a trial, `GET /wifi` for status (never return password), `DELETE /wifi` to forget saved credentials and enter setup AP.
+5. Add a Wi-Fi form and connection status to Settings. User implements firmware C; assistant handles frontend when requested.
+6. Shut down setup AP deliberately after success, allowing the UI to receive the result first.
+7. Test successful provisioning and persistence after reboot, incorrect password with old config preserved, open network, forgetting configuration, and repeated setup transitions.
+
+Captive portal and automatic opening of the setup page are deferred. Use `http://192.168.4.1` while connected to setup AP.
 
 # Known Issues For Future
 
@@ -630,7 +643,7 @@ These are known improvement areas. They are not all blockers for the next small 
 
 - `wifi_app_start()` starts Wi-Fi and begins connecting, but it does not wait until `IP_EVENT_STA_GOT_IP`. For later reliability, add `wifi_app_wait_connected(timeout_ms)` or an event group.
 - HTTP server currently starts immediately after `wifi_app_start()`. This is acceptable for `/health`, but future user-facing endpoints may want to wait for Wi-Fi connection/IP.
-- Kconfig symbols are currently generic: `CONFIG_WIFI_SSID`, `CONFIG_WIFI_PASSWORD`, `CONFIG_WIFI_MAX_RETRY`. Later consider prefixing them, for example `CONFIG_LED_DISPLAY_WIFI_SSID`.
+- Kconfig retains `CONFIG_WIFI_MAX_RETRY`; credential symbols were removed.
 - Wi-Fi retry handling logs failure after max retries, but does not expose a connection status or failure state to the application.
 - `wifi_app` has no stop/deinit function yet. Add only when lifecycle requires it.
 - `http_server_app` has no stop function yet. Add `http_server_app_stop()` when needed.
@@ -647,11 +660,13 @@ These are known improvement areas. They are not all blockers for the next small 
 - Display controller now protects framebuffer/render operations with a mutex. A future single display/render owner task may still be cleaner if more input sources or long-running effects are added.
 - Decide whether `led_matrix_set_brightness()` should store brightness as percent or raw 0-255 internally. Current API direction is percent from HTTP/UI.
 - Automatic brightness based on ambient light is a future hardware/software feature, likely using a photoresistor or light sensor.
-- `tools/pixel-editor.html` is not hosted by ESP32 yet.
-- mDNS is not implemented yet. The current local editor still needs direct IP input unless the user knows the device IP.
-- Wi-Fi credentials are currently configured through Kconfig / `sdkconfig`; runtime Wi-Fi provisioning is not implemented yet.
+- Active UI is hosted from `web/`; `tools/pixel-editor.html` remains a legacy local tool.
+- mDNS works; direct IP remains a fallback on networks/clients that do not support local multicast discovery.
+- Runtime credential submission, trial connection, save-on-success, and forget-network endpoints are not implemented yet.
+- Setup AP interface is currently created on entry. Repeated provisioning transitions must reuse it instead of creating it again.
+- Setup AP currently uses a shared fixed password; unique per-device setup credentials are future work.
 - Future ESP-hosted UI should continue using REST endpoints instead of directly coupling frontend routes to display internals.
-- Current editor UI is a development tool layout, not a product/mobile-friendly layout.
+- Tile-based responsive UI exists; broader mobile usability testing remains useful.
 - Local editor save/load currently uses one browser local storage slot only. Multiple named drawings are future work.
 - Current `/frame` endpoint accepts only full-frame raw RGB888 payloads matching the configured display size. Partial updates or single-pixel control are future work.
 - `led-image` is currently an editor/document format, not a device render format. Keep `/frame` raw RGB888 for live rendering.
@@ -1267,11 +1282,13 @@ Future ideas:
 
 Current status:
 
-- `tools/pixel-editor.html` is a local file opened from the development machine.
-- This is effective during development and avoids ESP flash/filesystem setup.
-- The current editor has grown into a development tool covering frame, text, brightness, and animation workflows.
+- DONE: `web/index.html`, `web/style.css`, and `web/app.js` are embedded in firmware.
+- GET `/`, `/style.css`, and `/app.js` serve the assets with appropriate content types.
+- Hosted UI uses relative REST URLs and reads `/display` on startup.
+- Tile dashboard and BACK navigation work on device, with separate frame/animation state and touch drawing tools.
+- `tools/pixel-editor.html` remains the legacy standalone version.
 
-Why hosting on ESP32 is worth considering next:
+Benefits of the implemented hosting:
 
 - The device becomes self-contained.
 - User connects to ESP32 IP and opens the editor directly.
@@ -1280,7 +1297,7 @@ Why hosting on ESP32 is worth considering next:
 
 Discovery direction:
 
-- Add mDNS so the device can be opened as:
+- DONE: mDNS allows the device to be opened as:
 
 ```text
 http://led-display.local
@@ -1298,14 +1315,14 @@ Wi-Fi provisioning direction:
 3. If credentials are missing or connection fails, start a setup access point:
 
 ```text
-SSID: LED-Display-Setup
+SSID: LED-display-Setup
 ```
 
-4. Serve a small setup/settings page from the ESP32.
-5. User enters target SSID/password.
-6. Device stores credentials in NVS and reconnects in STA mode.
+4. Serve the existing hosted UI; Wi-Fi settings form is NEXT.
+5. User submits target SSID/password; device tests them while keeping AP available (NEXT).
+6. Save credentials to NVS only after successful IP acquisition, then deliberately close AP (NEXT).
 
-This should replace the current Kconfig-only Wi-Fi credential flow later. Kconfig credentials can remain useful during development.
+Startup already reads credentials from NVS. Kconfig SSID/password options have been removed. See Next Milestone for the pending API and lifecycle work.
 
 REST API direction:
 
@@ -1327,15 +1344,14 @@ POST /animation/demo
 
 Product UI direction:
 
-- Replace the current tool-like single-page layout with a mode dashboard.
-- First screen should show tiles/cards for:
+- DONE: mode dashboard with tiles for:
   - Frame
   - Text
   - Animation
   - Demo
   - Settings
-- Each tile opens a focused view.
-- The layout should become more mobile-friendly when moved to ESP32.
+- Each tile opens a focused hash-based view with BACK navigation.
+- Responsive layout and explicit drawing tools support phones; Wi-Fi form is still pending.
 
 Static asset direction:
 
@@ -1349,7 +1365,7 @@ web/
   app.js
 ```
 
-- ESP32 can serve these as embedded files or from a flash filesystem.
+- These files are currently served as embedded assets. Flash filesystem hosting is optional future work.
 
 Possible approaches:
 
@@ -1361,15 +1377,13 @@ Possible approaches:
    - requires partition/filesystem setup
 3. Keep local HTML during active development, then package/host later.
    - fastest iteration
-   - best current choice until animation editor stabilizes
+   - legacy development option
 
 Recommendation:
 
-- Start with embedded static files unless filesystem-based UI updates become important immediately.
-- Keep local HTML during active development if it speeds iteration.
-- Move toward `web/index.html`, `web/style.css`, and `web/app.js` before embedding/serving.
-- Add mDNS before or alongside hosting so the user can open the UI without checking UART logs for IP.
-- Treat Wi-Fi provisioning as the next product-quality step after basic hosted UI works.
+- Keep the implemented embedded asset approach; rebuild/flash to update UI.
+- Keep mDNS and direct IP fallback.
+- Complete runtime Wi-Fi provisioning next, including save-on-success and forget-network behavior.
 
 # Stretch Goals
 
