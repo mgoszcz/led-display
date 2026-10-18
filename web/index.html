@@ -8,7 +8,18 @@
   </head>
   <body>
     <main>
-      <h1>LED Matrix Pixel Editor</h1>
+      <header class="app-header"><a href="#/home" class="home-link">LED Matrix</a><span id="displayInfo">Connecting...</span></header>
+      <nav id="homeView" class="mode-grid" aria-label="Display modes">
+        <a href="#/frame" class="mode-tile">Frame</a>
+        <a href="#/text" class="mode-tile">Text</a>
+        <a href="#/animation" class="mode-tile">Animation</a>
+        <a href="#/demo" class="mode-tile">Demo</a>
+        <a href="#/settings" class="mode-tile">Settings</a>
+      </nav>
+      <div class="view-heading">
+        <a id="backButton" class="back-button" href="#/home" hidden><span aria-hidden="true">&larr;</span> BACK</a>
+        <h1 id="viewTitle">Home</h1>
+      </div>
 
       <section class="toolbar" aria-label="Drawing controls">
         <div class="toolbar-group wide">
@@ -140,7 +151,7 @@
         <input id="imageInput" class="hidden" type="file" accept="image/*" />
       </section>
 
-      <div id="status" class="status">Ready.</div>
+      <div id="status" class="status" role="status" aria-live="polite">Ready.</div>
 
       <section class="editor">
         <div id="grid" class="grid" aria-label="16 by 16 pixel grid"></div>

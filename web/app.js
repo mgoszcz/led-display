@@ -62,6 +62,9 @@ let isSelectMode = false;
 let isSelecting = false;
 let selectionAnchorIndex = null;
 let selectedPixels = new Set();
+let framePixels = createEmptyPixels(matrixWidth, matrixHeight);
+let currentView = "home";
+let drawingTool = "draw";
 
 function createEmptyPixels(width, height) {
   return Array.from({ length: width * height }, () => ({ r: 0, g: 0, b: 0 }));
@@ -786,6 +789,7 @@ async function loadDisplayConfig() {
   }
 
   setMatrixSize(width, height, false);
+  document.getElementById("displayInfo").textContent = sizeValue;
   setStatus(`ESP32 health check OK. Display size: ${sizeValue}.`, "ok");
 }
 
@@ -935,7 +939,7 @@ async function sendText() {
   try {
     const payload = {
       text,
-      color: hexToRgb(colorInput.value),
+      color: hexToRgb(document.getElementById("textColorInput").value),
       speedMs: getTextSpeedMs(),
     };
 
@@ -981,7 +985,7 @@ function createGrid() {
     cell.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       isPointerDown = true;
-      eraseMode = event.button === 2;
+      eraseMode = event.button === 2 || drawingTool === "erase";
 
       if (isSelectMode) {
         isSelecting = true;
@@ -1047,6 +1051,8 @@ function setMatrixSize(width, height, keepStatus) {
   matrixWidth = width;
   matrixHeight = height;
   resetAnimationFrames();
+  framePixels = createEmptyPixels(width, height);
+  if (currentView === "frame") pixels = framePixels;
   createGrid();
   applyPixels(pixels);
 
@@ -1112,9 +1118,86 @@ textInput.addEventListener("keydown", (event) => {
 brightnessInput.addEventListener("input", updateBrightnessValue);
 brightnessInput.addEventListener("change", sendBrightness);
 
+function setupViews() {
+  const groups = document.querySelectorAll(".toolbar-group");
+  groups[0].dataset.views = "text";
+  groups[1].dataset.views = "frame animation";
+  groups[2].dataset.views = "animation";
+  groups[3].dataset.views = "settings";
+  const demoSection = document.createElement("div");
+  demoSection.className = "toolbar-group";
+  demoSection.dataset.views = "demo";
+  demoSection.appendChild(demoButton);
+  const scanner = document.createElement("button");
+  scanner.type = "button";
+  scanner.textContent = "SCANNER";
+  scanner.addEventListener("click", async () => {
+    try {
+      const response = await fetch("/animation/demo", { method: "POST" });
+      if (!response.ok) throw new Error(await response.text());
+      setStatus("Scanner started.", "ok");
+    } catch (error) { setStatus(error.message, "error"); }
+  });
+  demoSection.appendChild(scanner);
+  document.querySelector(".toolbar").appendChild(demoSection);
+  const textColorLabel = document.createElement("label");
+  textColorLabel.textContent = "Color";
+  const textColor = document.createElement("input");
+  textColor.type = "color";
+  textColor.id = "textColorInput";
+  textColor.value = "#2020ff";
+  textColorLabel.appendChild(textColor);
+  groups[0].insertBefore(textColorLabel, textButton);
+  const tools = document.createElement("select");
+  tools.id = "drawingTool";
+  tools.setAttribute("aria-label", "Drawing tool");
+  for (const [value, label] of [["draw", "Draw"], ["erase", "Erase"], ["select", "Select"]]) {
+    const option = document.createElement("option");
+    option.value = value; option.textContent = label; tools.appendChild(option);
+  }
+  tools.addEventListener("change", () => {
+    drawingTool = tools.value;
+    setSelectMode(drawingTool === "select");
+  });
+  groups[1].insertBefore(tools, clearButton);
+  selectButton.hidden = true;
+  document.querySelector(".side").remove();
+  matrixSizeInput.disabled = true;
+}
+
+function showView() {
+  stopAnimationPreview();
+  clearSelection();
+  const requested = location.hash.replace(/^#\//, "") || "home";
+  currentView = ["frame", "text", "animation", "demo", "settings"].includes(requested) ? requested : "home";
+  pixels = currentView === "frame" ? framePixels : animationFrames[activeFrameIndex];
+  document.getElementById("homeView").hidden = currentView !== "home";
+  document.getElementById("backButton").hidden = currentView === "home";
+  document.getElementById("viewTitle").textContent = currentView[0].toUpperCase() + currentView.slice(1);
+  document.querySelector(".toolbar").hidden = currentView === "home";
+  for (const group of document.querySelectorAll("[data-views]")) {
+    group.hidden = !group.dataset.views.split(" ").includes(currentView);
+  }
+  document.querySelector(".editor").hidden = !["frame", "animation"].includes(currentView);
+  sendButton.hidden = currentView !== "frame";
+  renderPixelsToGrid(pixels);
+}
+
+setupViews();
+window.addEventListener("hashchange", showView);
+gridEl.addEventListener("pointermove", (event) => {
+  if (!isPointerDown) return;
+  const cell = document.elementFromPoint(event.clientX, event.clientY);
+  if (!cell || !cell.classList.contains("cell")) return;
+  if (isSelecting && selectionAnchorIndex !== null) {
+    updateRectSelection(selectionAnchorIndex, Number(cell.dataset.index));
+  } else if (!isSelectMode) paintCell(cell, eraseMode);
+});
+document.addEventListener("pointercancel", () => { isPointerDown = false; isSelecting = false; });
 updateBrightnessValue();
 createGrid();
 updateAnimationFrameSelector();
+showView();
 loadDisplayConfig().catch((error) => {
   setStatus(`Failed to load display config: ${error.message}`, "error");
 });

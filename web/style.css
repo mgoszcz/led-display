@@ -5,6 +5,32 @@
   color: #f2f2f2;
 }
 
+[hidden] { display: none !important; }
+.app-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; border-bottom: 1px solid #444; padding-bottom: 18px; }
+.home-link { color: #fff; font-size: 24px; font-weight: 700; text-decoration: none; }
+.view-heading { display: flex; align-items: center; gap: 16px; }
+.back-button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border: 1px solid #505050; border-radius: 6px; color: #fff; text-decoration: none; font-size: 14px; font-weight: 600; }
+.back-button:hover { background: #303030; }
+#displayInfo { color: #a5c6b4; }
+.mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; }
+.mode-tile { display: flex; align-items: center; justify-content: center; min-height: 130px; border: 1px solid #505050; border-radius: 8px; background: #252525; color: white; text-decoration: none; font-size: 20px; font-weight: 600; }
+.mode-tile:hover { border-color: #7dff9c; background: #303030; }
+main { align-content: start; }
+.toolbar { grid-template-columns: 1fr !important; padding: 0 !important; border: 0 !important; background: transparent !important; }
+.toolbar-group { border: 0 !important; border-bottom: 1px solid #444 !important; border-radius: 0 !important; padding: 12px 0 !important; background: transparent !important; }
+.toolbar-group.wide { grid-column: auto !important; }
+.editor { grid-template-columns: minmax(0, 1fr) !important; }
+button, select, input[type="text"], input[type="number"], input[type="color"] { min-height: 44px; }
+button:focus-visible, a:focus-visible, select:focus-visible { outline: 2px solid #7dff9c; outline-offset: 3px; }
+@media (max-width: 600px) {
+  body { padding: 16px 10px !important; }
+  .toolbar-group { gap: 8px; }
+  .toolbar-group > label { max-width: 100%; }
+  button { font-size: 12px; padding: 0 10px; }
+  .grid { gap: 1px !important; padding: 3px !important; }
+  .cell { min-height: 0; border-radius: 0 !important; }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -204,6 +230,7 @@ button.active {
 }
 
 .cell {
+  min-height: 0;
   width: 100%;
   min-width: 0;
   height: auto;
