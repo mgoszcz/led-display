@@ -6,6 +6,8 @@
 #include "esp_check.h"
 #include "wifi_app.h"
 #include <stdbool.h>
+#include <string.h>
+#include "wifi_config_store.h"
 
 #define WIFI_MAX_RETRY CONFIG_WIFI_MAX_RETRY
 
@@ -13,12 +15,9 @@ static const char *TAG = "WIFI_APP";
 static int s_retry_count = 0;
 static bool s_started = false;
 static wifi_app_state_t s_wifi_state = WIFI_APP_STATE_STOPPED;
-static wifi_config_t s_wifi_config = (wifi_config_t) {
-    .sta = {
-        .ssid = CONFIG_WIFI_SSID,
-        .password = CONFIG_WIFI_PASSWORD,
-    },
-};
+static wifi_config_t s_wifi_config = {0};
+static char s_ssid[33] = {0};
+static char s_password[65] = {0};
 
 static esp_err_t wifi_app_init_nvs(void)
 {
@@ -111,6 +110,7 @@ static esp_err_t wifi_app_init(void)
 {
     wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_RETURN_ON_ERROR(wifi_app_init_nvs(), TAG, "Failed to initialize NVS flash");
+    ESP_RETURN_ON_ERROR(wifi_config_store_init(), TAG, "Failed to initialize WiFi config store");
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "Failed to initialize ESP-NETIF");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "Failed to create ESP event loop");
     esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
@@ -139,13 +139,15 @@ static esp_err_t wifi_app_init(void)
     return ESP_OK;
 }
 
-static bool wifi_read_config(void)
+static esp_err_t wifi_read_config(void)
 {
-    if (CONFIG_WIFI_SSID[0] == '\0') {
-        ESP_LOGI(TAG, "WiFi SSID or password is not set in sdkconfig");
-        return false;
+    esp_err_t err = wifi_config_store_load(s_ssid, sizeof(s_ssid), s_password, sizeof(s_password));
+    if (err == ESP_OK) {
+        if (s_ssid[0] == '\0') {
+            return ESP_ERR_NVS_NOT_FOUND;
+        }
     }
-    return true;
+    return err;
 }
 
 static esp_err_t sta_connect(void)
@@ -157,7 +159,7 @@ static esp_err_t sta_connect(void)
     
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "Failed to start WiFi");
     s_wifi_state = WIFI_APP_STATE_CONNECTING;
-    ESP_LOGI(TAG, "WiFi initialization complete, connecting to SSID: %s", CONFIG_WIFI_SSID);
+    ESP_LOGI(TAG, "WiFi initialization complete, connecting to SSID: %s", s_ssid);
     esp_err_t err = esp_wifi_connect();
     if (err != ESP_OK) {
         s_wifi_state = WIFI_APP_STATE_DISCONNECTED;
@@ -180,12 +182,18 @@ esp_err_t wifi_app_start(void) {
     
     ESP_RETURN_ON_ERROR(wifi_app_init(), TAG, "Failed to initialize WiFi app");
 
-    bool config_read = wifi_read_config();
-    if (!config_read) {
-        ESP_LOGW(TAG, "WiFi configuration is not set. Please set CONFIG_WIFI_SSID and CONFIG_WIFI_PASSWORD in sdkconfig.");
+    esp_err_t config_read = wifi_read_config();
+    if (config_read == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "WiFi configuration is not set. Setting up WiFi in AP mode for configuration.");
         ESP_RETURN_ON_ERROR(wifi_app_start_setup(), TAG, "Failed to initialize AP");
+    } else if (config_read != ESP_OK) {
+        return config_read;
     } else {
-        ESP_LOGI(TAG, "WiFi configuration read successfully. Attempting to connect to SSID: %s", CONFIG_WIFI_SSID);
+        ESP_LOGI(TAG, "WiFi configuration read successfully. Attempting to connect to SSID: %s", s_ssid);
+        memset(&s_wifi_config, 0, sizeof(s_wifi_config));
+
+        memcpy(s_wifi_config.sta.ssid, s_ssid, strlen(s_ssid));
+        memcpy(s_wifi_config.sta.password, s_password, strlen(s_password));
         ESP_RETURN_ON_ERROR(sta_connect(), TAG, "Failed to connect to WiFi");
     }
     

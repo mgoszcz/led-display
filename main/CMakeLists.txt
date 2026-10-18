@@ -1,4 +1,4 @@
-idf_component_register(SRCS "network_discovery.c" "uploaded_animation_store.c" "animations.c" "animation_display_engine.c" "display_controller.c" "font_5x7.c" "text_display_engine.c" "wifi_app.c" "framebuffer.c" "image_store.c" "images.c" "led_matrix.c" "main.c" "http_server_app.c"
+idf_component_register(SRCS "network_discovery.c" "uploaded_animation_store.c" "animations.c" "animation_display_engine.c" "display_controller.c" "font_5x7.c" "text_display_engine.c" "wifi_app.c" "framebuffer.c" "image_store.c" "images.c" "led_matrix.c" "main.c" "http_server_app.c" "wifi_config_store.c"
                     INCLUDE_DIRS "."
                     EMBED_FILES "../web/index.html" "../web/style.css" "../web/app.js"
                     REQUIRES led_strip esp_wifi nvs_flash esp_netif esp_event esp_http_server esp_timer json)
