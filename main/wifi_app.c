@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_check.h"
+#include "wifi_app.h"
 #include <stdbool.h>
 
 #define WIFI_MAX_RETRY CONFIG_WIFI_MAX_RETRY
@@ -11,6 +12,13 @@
 static const char *TAG = "WIFI_APP";
 static int s_retry_count = 0;
 static bool s_started = false;
+static wifi_app_state_t s_wifi_state = WIFI_APP_STATE_STOPPED;
+static wifi_config_t s_wifi_config = (wifi_config_t) {
+    .sta = {
+        .ssid = CONFIG_WIFI_SSID,
+        .password = CONFIG_WIFI_PASSWORD,
+    },
+};
 
 static esp_err_t wifi_app_init_nvs(void)
 {
@@ -24,40 +32,84 @@ static esp_err_t wifi_app_init_nvs(void)
     return err;
 }
 
+static esp_err_t wifi_app_start_setup(void) {
+    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+    if (ap_netif == NULL) {
+        return ESP_FAIL;
+    }
+    wifi_config_t ap_config = {
+        .ap = {
+            .ssid = "LED-display-Setup",
+            .max_connection = 1,
+            .password = "LEDsetupPass",
+            .authmode = WIFI_AUTH_WPA2_PSK
+        }
+    };
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "Failed to set WiFi mode to AP");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_config), TAG, "Failed to configure WiFi AP");
+    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "Failed to start WiFi");
+    s_wifi_state = WIFI_APP_STATE_SETUP;
+    return ESP_OK;
+}
+
+static esp_err_t restart_wifi_to_ap(void) {
+     esp_err_t wifi_stop = esp_wifi_stop();
+    if (wifi_stop != ESP_OK) {
+        ESP_LOGE(TAG, "Stopping wifi failed: %s", esp_err_to_name(wifi_stop));
+        return wifi_stop;
+    }
+    esp_err_t ap_start = wifi_app_start_setup();
+    if (ap_start != ESP_OK) {
+        ESP_LOGE(TAG, "Starting WiFi in AP mode failed: %s", esp_err_to_name(ap_start));
+        return ap_start;
+    }
+    return ESP_OK;
+}
+
 static void wifi_event_handler(void *arg,
                                esp_event_base_t event_base,
                                int32_t event_id,
                                void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (s_wifi_state != WIFI_APP_STATE_CONNECTING &&
+            s_wifi_state != WIFI_APP_STATE_CONNECTED) {
+            return;
+        }
+        s_wifi_state = WIFI_APP_STATE_CONNECTING;
         if (s_retry_count < WIFI_MAX_RETRY) {
             s_retry_count++;
             ESP_LOGW(TAG, "WiFi disconnected, reconnecting... (%d/%d)", s_retry_count, WIFI_MAX_RETRY);
-            esp_wifi_connect();
+            esp_err_t err = esp_wifi_connect();
+            if (err != ESP_OK) {
+                s_wifi_state = WIFI_APP_STATE_DISCONNECTED;
+                ESP_LOGE(TAG, "Reconnect failed: %s", esp_err_to_name(err));
+                esp_err_t ap_err = restart_wifi_to_ap();
+                if (ap_err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to restart WiFi in AP mode: %s", esp_err_to_name(ap_err));
+                }
+            }
         } else {
             ESP_LOGE(TAG, "WiFi connection failed after %d retries", WIFI_MAX_RETRY);
+            s_wifi_state = WIFI_APP_STATE_DISCONNECTED;
+            esp_err_t ap_err = restart_wifi_to_ap();
+            if (ap_err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to restart WiFi in AP mode: %s", esp_err_to_name(ap_err));
+            }
         }
     }
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
         s_retry_count = 0;
+        s_wifi_state = WIFI_APP_STATE_CONNECTED;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
     }
 }
 
-esp_err_t wifi_app_start(void) {
-    if (s_started) {
-        return ESP_OK;
-    }
-
-    wifi_config_t sta_config = {
-        .sta = {
-            .ssid = CONFIG_WIFI_SSID,
-            .password = CONFIG_WIFI_PASSWORD,
-        },
-    };
-    
+static esp_err_t wifi_app_init(void)
+{
+    wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_RETURN_ON_ERROR(wifi_app_init_nvs(), TAG, "Failed to initialize NVS flash");
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "Failed to initialize ESP-NETIF");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "Failed to create ESP event loop");
@@ -65,13 +117,7 @@ esp_err_t wifi_app_start(void) {
     if (sta_netif == NULL) {
         return ESP_FAIL;
     }
-
-    wifi_init_config_t wifi_config = WIFI_INIT_CONFIG_DEFAULT();
-    
     ESP_RETURN_ON_ERROR(esp_wifi_init(&wifi_config), TAG, "Failed to initialize WiFi");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "Failed to set WiFi mode to STA");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &sta_config), TAG, "Failed to configure WiFi STA");
-
     ESP_RETURN_ON_ERROR(
         esp_event_handler_register(WIFI_EVENT,
                                 ESP_EVENT_ANY_ID,
@@ -90,9 +136,58 @@ esp_err_t wifi_app_start(void) {
         "Failed to register IP event handler"
     );
 
+    return ESP_OK;
+}
+
+static bool wifi_read_config(void)
+{
+    if (CONFIG_WIFI_SSID[0] == '\0') {
+        ESP_LOGI(TAG, "WiFi SSID or password is not set in sdkconfig");
+        return false;
+    }
+    return true;
+}
+
+static esp_err_t sta_connect(void)
+{
+    s_retry_count = 0;
+    
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "Failed to set WiFi mode to STA");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &s_wifi_config), TAG, "Failed to configure WiFi STA");
+    
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "Failed to start WiFi");
+    s_wifi_state = WIFI_APP_STATE_CONNECTING;
     ESP_LOGI(TAG, "WiFi initialization complete, connecting to SSID: %s", CONFIG_WIFI_SSID);
-    ESP_RETURN_ON_ERROR(esp_wifi_connect(), TAG, "Failed to connect to WiFi");
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        s_wifi_state = WIFI_APP_STATE_DISCONNECTED;
+        ESP_LOGE(TAG, "Reconnect failed: %s", esp_err_to_name(err));
+        esp_err_t ap_err = restart_wifi_to_ap();
+        if (ap_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to restart WiFi in AP mode: %s", esp_err_to_name(ap_err));
+        }
+        return ap_err;
+    }
+
+    return err;
+}
+
+
+esp_err_t wifi_app_start(void) {
+    if (s_started) {
+        return ESP_OK;
+    }
+    
+    ESP_RETURN_ON_ERROR(wifi_app_init(), TAG, "Failed to initialize WiFi app");
+
+    bool config_read = wifi_read_config();
+    if (!config_read) {
+        ESP_LOGW(TAG, "WiFi configuration is not set. Please set CONFIG_WIFI_SSID and CONFIG_WIFI_PASSWORD in sdkconfig.");
+        ESP_RETURN_ON_ERROR(wifi_app_start_setup(), TAG, "Failed to initialize AP");
+    } else {
+        ESP_LOGI(TAG, "WiFi configuration read successfully. Attempting to connect to SSID: %s", CONFIG_WIFI_SSID);
+        ESP_RETURN_ON_ERROR(sta_connect(), TAG, "Failed to connect to WiFi");
+    }
     
     s_started = true;
     return ESP_OK;
