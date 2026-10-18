@@ -2,6 +2,7 @@
 #include "wifi_app.h"
 #include "http_server_app.h"
 #include "display_controller.h"
+#include "network_discovery.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -67,6 +68,7 @@ void app_main(void)
         handle_animation,
         handle_demo_animation
     ));
+    ESP_ERROR_CHECK(esp_mdns_discovery_start());
     
     ESP_ERROR_CHECK(image_store_get("smile", &smile_image));
     ESP_ERROR_CHECK(image_store_get("lightning", &lightning_image));

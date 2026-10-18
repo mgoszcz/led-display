@@ -23,10 +23,32 @@ static uint16_t s_width;
 static uint16_t s_height;
 static uint8_t s_animation_upload_buffer[UPLOADED_ANIMATION_MAX_PIXELS * 3];
 
+extern const char index_html_start[] asm("_binary_index_html_start");
+extern const char index_html_end[] asm("_binary_index_html_end");
+extern const char style_css_start[] asm("_binary_style_css_start");
+extern const char style_css_end[] asm("_binary_style_css_end");
+extern const char script_js_start[] asm("_binary_app_js_start");
+extern const char script_js_end[] asm("_binary_app_js_end");
+
 static void set_cors_headers(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+}
+
+static esp_err_t index_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html; charset=UTF-8");
+    return httpd_resp_send(req, index_html_start, index_html_end - index_html_start);
+}
+
+static esp_err_t style_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/css; charset=UTF-8");
+    return httpd_resp_send(req, style_css_start, style_css_end - style_css_start);
+}
+
+static esp_err_t script_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/javascript; charset=UTF-8");
+    return httpd_resp_send(req, script_js_start, script_js_end - script_js_start);
 }
 
 static esp_err_t options_handler(httpd_req_t *req)
@@ -385,6 +407,27 @@ static esp_err_t animation_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static const httpd_uri_t index_uri = {
+    .uri = "/",
+    .method = HTTP_GET,
+    .handler = index_handler,
+    .user_ctx = NULL
+};
+
+static const httpd_uri_t style_uri = {
+    .uri = "/style.css",
+    .method = HTTP_GET,
+    .handler = style_handler,
+    .user_ctx = NULL
+};
+
+static const httpd_uri_t script_uri = {
+    .uri = "/app.js",
+    .method = HTTP_GET,
+    .handler = script_handler,
+    .user_ctx = NULL
+};
+
 static const httpd_uri_t health_check_uri = {
     .uri = "/health",
     .method = HTTP_GET,
@@ -510,26 +553,29 @@ esp_err_t http_server_app_start(
     }
     
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 16;
     
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &config), TAG, "Failed to start HTTP server");
     esp_err_t err = httpd_register_uri_handler(s_server, &health_check_uri);
     esp_err_t err2 = httpd_register_uri_handler(s_server, &frame_draw_uri);
-    esp_err_t err3 = httpd_register_uri_handler(s_server, &demo_enable_uri);
-    esp_err_t err4 = httpd_register_uri_handler(s_server, &brightness_uri);
-    esp_err_t err5 = httpd_register_uri_handler(s_server, &text_uri);
-    esp_err_t err6 = httpd_register_uri_handler(s_server, &text_options_uri);
-    esp_err_t err7 = httpd_register_uri_handler(s_server, &get_display_uri);
-    esp_err_t err8 = httpd_register_uri_handler(s_server, &animation_uri);
-    esp_err_t err9 = httpd_register_uri_handler(s_server, &animation_options_uri);
-    esp_err_t err10 = httpd_register_uri_handler(s_server, &demo_animation_uri);
-    esp_err_t err11 = httpd_register_uri_handler(s_server, &demo_animation_options_uri);
+    esp_err_t err3 = httpd_register_uri_handler(s_server, &index_uri);
+    esp_err_t err4 = httpd_register_uri_handler(s_server, &style_uri);
+    esp_err_t err5 = httpd_register_uri_handler(s_server, &script_uri);
+    esp_err_t err6 = httpd_register_uri_handler(s_server, &brightness_uri);
+    esp_err_t err7 = httpd_register_uri_handler(s_server, &text_uri);
+    esp_err_t err8 = httpd_register_uri_handler(s_server, &text_options_uri);
+    esp_err_t err9 = httpd_register_uri_handler(s_server, &get_display_uri);
+    esp_err_t err10 = httpd_register_uri_handler(s_server, &animation_uri);
+    esp_err_t err11 = httpd_register_uri_handler(s_server, &animation_options_uri);
+    esp_err_t err12 = httpd_register_uri_handler(s_server, &demo_animation_uri);
+    esp_err_t err13 = httpd_register_uri_handler(s_server, &demo_animation_options_uri);
+    esp_err_t err14 = httpd_register_uri_handler(s_server, &demo_enable_uri);
 
-    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK || err7 != ESP_OK || err8 != ESP_OK || err9 != ESP_OK || err10 != ESP_OK || err11 != ESP_OK) {
+    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK || err7 != ESP_OK || err8 != ESP_OK || err9 != ESP_OK || err10 != ESP_OK || err11 != ESP_OK || err12 != ESP_OK || err13 != ESP_OK || err14 != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register URI handler");
         httpd_stop(s_server);
         s_server = NULL;
-        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : (err6 != ESP_OK ? err6 : (err7 != ESP_OK ? err7 : (err8 != ESP_OK ? err8 : (err9 != ESP_OK ? err9 : (err10 != ESP_OK ? err10 : err11)))))))));
+        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : (err6 != ESP_OK ? err6 : (err7 != ESP_OK ? err7 : (err8 != ESP_OK ? err8 : (err9 != ESP_OK ? err9 : (err10 != ESP_OK ? err10 : (err11 != ESP_OK ? err11 : (err12 != ESP_OK ? err12 : (err13 != ESP_OK ? err13 : err14))))))))))));
     }
     return ESP_OK;
 }

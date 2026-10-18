@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LED Matrix Pixel Editor</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>LED Matrix Pixel Editor</h1>
+
+      <section class="toolbar" aria-label="Drawing controls">
+        <div class="toolbar-group wide">
+          <p class="toolbar-title">Text display</p>
+          <label>
+            Text
+            <input
+              id="textInput"
+              type="text"
+              maxlength="64"
+              placeholder="Maria"
+            />
+          </label>
+          <label>
+            Speed ms
+            <input
+              id="textSpeedInput"
+              type="number"
+              min="10"
+              max="5000"
+              step="10"
+              value="100"
+            />
+          </label>
+          <button id="textButton" class="text-send" type="button">
+            SEND TEXT
+          </button>
+        </div>
+
+        <div class="toolbar-group wide">
+          <p class="toolbar-title">Pixel frame</p>
+          <label>
+            Color
+            <input id="colorInput" type="color" value="#2020ff" />
+          </label>
+          <label>
+            Display size
+            <select id="matrixSizeInput">
+              <option value="16x16" selected>16x16</option>
+              <option value="32x16">32x16</option>
+              <option value="16x32">16x32</option>
+              <option value="32x32">32x32</option>
+            </select>
+          </label>
+          <button id="clearButton" type="button">CLEAR</button>
+          <button id="saveButton" type="button">SAVE</button>
+          <button id="loadButton" type="button">LOAD</button>
+          <button id="exportButton" type="button">EXPORT</button>
+          <button id="importButton" type="button">IMPORT</button>
+          <label>
+            Image mode
+            <select id="imageModeInput">
+              <option value="crop" selected>CROP</option>
+              <option value="fit">FIT</option>
+            </select>
+          </label>
+          <button id="imageImportButton" type="button">IMAGE</button>
+          <button id="sendButton" class="primary" type="button">
+            SEND FRAME
+          </button>
+        </div>
+
+        <div class="toolbar-group wide">
+          <p class="toolbar-title">Animation</p>
+          <label>
+            Frame
+            <select id="animationFrameInput"></select>
+          </label>
+          <label>
+            Speed ms
+            <input
+              id="animationSpeedInput"
+              type="number"
+              min="10"
+              max="5000"
+              step="10"
+              value="110"
+            />
+          </label>
+          <label>
+            Loop
+            <select id="animationLoopInput">
+              <option value="1" selected>YES</option>
+              <option value="0">NO</option>
+            </select>
+          </label>
+          <button id="addFrameButton" type="button">ADD FRAME</button>
+          <button id="duplicateFrameButton" type="button">COPY FRAME</button>
+          <button id="deleteFrameButton" type="button">DELETE FRAME</button>
+          <button id="clearAnimationButton" type="button">CLEAR ANIM</button>
+          <button id="selectButton" type="button">SELECT</button>
+          <button id="clearSelectionButton" type="button">
+            CLEAR SELECTION
+          </button>
+          <button id="shiftLeftButton" type="button">SHIFT LEFT</button>
+          <button id="shiftRightButton" type="button">SHIFT RIGHT</button>
+          <button id="shiftUpButton" type="button">SHIFT UP</button>
+          <button id="shiftDownButton" type="button">SHIFT DOWN</button>
+          <button id="previewAnimationButton" type="button">PLAY</button>
+          <button id="sendAnimationButton" class="primary" type="button">
+            SEND ANIM
+          </button>
+          <button id="exportAnimationButton" type="button">EXPORT ANIM</button>
+          <button id="importAnimationButton" type="button">IMPORT ANIM</button>
+        </div>
+
+        <div class="toolbar-group">
+          <p class="toolbar-title">Device</p>
+          <label class="range-label">
+            Brightness <span id="brightnessValue" class="range-value">35%</span>
+            <input
+              id="brightnessInput"
+              type="range"
+              min="1"
+              max="100"
+              value="35"
+            />
+          </label>
+          <button id="demoButton" type="button">DEMO</button>
+        </div>
+
+        <input id="importInput" class="hidden" type="file" accept=".json" />
+        <input
+          id="animationImportInput"
+          class="hidden"
+          type="file"
+          accept=".json"
+        />
+        <input id="imageInput" class="hidden" type="file" accept="image/*" />
+      </section>
+
+      <div id="status" class="status">Ready.</div>
+
+      <section class="editor">
+        <div id="grid" class="grid" aria-label="16 by 16 pixel grid"></div>
+
+        <aside class="side">
+          <div><strong>Left click</strong>: paint selected color</div>
+          <div><strong>Right click</strong>: erase pixel</div>
+          <div>
+            <strong>Brightness</strong>: sends value to <code>/brightness</code>
+          </div>
+          <div>
+            <strong>Save/Load</strong>: stores one drawing in this browser
+          </div>
+          <div><strong>Export/Import</strong>: uses a JSON drawing file</div>
+          <div>
+            <strong>Image</strong>: converts PNG/JPEG/WebP/GIF to the selected
+            grid size
+          </div>
+          <div>
+            <strong>Text</strong>: POST JSON to <code>/text</code> using
+            selected color
+          </div>
+          <div>
+            <strong>Send</strong>: POST raw RGB888 frame to <code>/frame</code>
+          </div>
+          <div>
+            <strong>Animation</strong>: edit up to 20 frames and POST raw RGB888
+            frames to <code>/animation</code>
+          </div>
+          <div>
+            <strong>Select</strong>: mark part of a frame, then shift only
+            selected pixels
+          </div>
+          <div><strong>Demo</strong>: POST to <code>/demo</code></div>
+        </aside>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
