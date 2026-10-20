@@ -19,6 +19,7 @@ typedef esp_err_t (*http_animation_handler_t)(
     bool loop
 );
 typedef esp_err_t (*http_demo_animation_handler_t)(void);
+typedef esp_err_t (*http_wifi_connect_handler_t)(const char *ssid, const char *password);
 
 
 esp_err_t http_server_app_start(
@@ -29,5 +30,6 @@ esp_err_t http_server_app_start(
     http_brightness_handler_t brightness_handler,
     http_text_handler_t text_handler,
     http_animation_handler_t animation_handler,
-    http_demo_animation_handler_t demo_animation_handler
+    http_demo_animation_handler_t demo_animation_handler,
+    http_wifi_connect_handler_t wifi_connect_handler
 );

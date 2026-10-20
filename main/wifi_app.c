@@ -18,6 +18,8 @@ static wifi_app_state_t s_wifi_state = WIFI_APP_STATE_STOPPED;
 static wifi_config_t s_wifi_config = {0};
 static char s_ssid[33] = {0};
 static char s_password[65] = {0};
+static bool s_credentials_pending = false;
+static esp_netif_t *s_ap_netif = NULL;
 
 static esp_err_t wifi_app_init_nvs(void)
 {
@@ -32,10 +34,13 @@ static esp_err_t wifi_app_init_nvs(void)
 }
 
 static esp_err_t wifi_app_start_setup(void) {
-    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
-    if (ap_netif == NULL) {
-        return ESP_FAIL;
+    if (s_ap_netif == NULL) {
+        s_ap_netif = esp_netif_create_default_wifi_ap();
+        if (s_ap_netif == NULL) {
+            return ESP_FAIL;
+        }
     }
+    
     wifi_config_t ap_config = {
         .ap = {
             .ssid = "LED-display-Setup",
@@ -82,6 +87,7 @@ static void wifi_event_handler(void *arg,
             esp_err_t err = esp_wifi_connect();
             if (err != ESP_OK) {
                 s_wifi_state = WIFI_APP_STATE_DISCONNECTED;
+                s_credentials_pending = false;
                 ESP_LOGE(TAG, "Reconnect failed: %s", esp_err_to_name(err));
                 esp_err_t ap_err = restart_wifi_to_ap();
                 if (ap_err != ESP_OK) {
@@ -91,6 +97,7 @@ static void wifi_event_handler(void *arg,
         } else {
             ESP_LOGE(TAG, "WiFi connection failed after %d retries", WIFI_MAX_RETRY);
             s_wifi_state = WIFI_APP_STATE_DISCONNECTED;
+            s_credentials_pending = false;
             esp_err_t ap_err = restart_wifi_to_ap();
             if (ap_err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to restart WiFi in AP mode: %s", esp_err_to_name(ap_err));
@@ -103,6 +110,17 @@ static void wifi_event_handler(void *arg,
         s_retry_count = 0;
         s_wifi_state = WIFI_APP_STATE_CONNECTED;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+    }
+
+    if (s_credentials_pending && event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        esp_err_t err = wifi_config_store_save(s_ssid, s_password);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to save WiFi credentials: %s", esp_err_to_name(err));
+            s_credentials_pending = false;
+        } else {
+            ESP_LOGI(TAG, "WiFi credentials saved successfully.");
+            s_credentials_pending = false;
+        }
     }
 }
 
@@ -198,5 +216,42 @@ esp_err_t wifi_app_start(void) {
     }
     
     s_started = true;
+    return ESP_OK;
+}
+
+esp_err_t wifi_app_connect(const char *ssid, const char *password) {
+    if (s_wifi_state != WIFI_APP_STATE_SETUP) {
+        ESP_LOGE(TAG, "WiFi is not in setup mode.");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (ssid == NULL || password == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(ssid) > sizeof(s_wifi_config.sta.ssid) || strlen(password) > sizeof(s_wifi_config.sta.password) - 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(ssid) == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memcpy(s_ssid, ssid, strlen(ssid) + 1);
+    memcpy(s_password, password, strlen(password) + 1);
+    memset(&s_wifi_config, 0, sizeof(s_wifi_config));
+
+    memcpy(s_wifi_config.sta.ssid, s_ssid, strlen(s_ssid));
+    memcpy(s_wifi_config.sta.password, s_password, strlen(s_password));
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), TAG, "Failed to set WiFi mode to APSTA");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &s_wifi_config), TAG, "Failed to configure WiFi STA");
+
+    s_retry_count = 0;
+    s_wifi_state = WIFI_APP_STATE_CONNECTING;
+    s_credentials_pending = true;
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to connect to WiFi: %s", esp_err_to_name(err));
+        s_credentials_pending = false;
+        ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "Failed to set WiFi mode to AP");
+        s_wifi_state = WIFI_APP_STATE_SETUP;
+        return err;
+    }
     return ESP_OK;
 }

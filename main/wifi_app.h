@@ -11,3 +11,4 @@ typedef enum {
 } wifi_app_state_t;
 
 esp_err_t wifi_app_start(void);
+esp_err_t wifi_app_connect(const char *ssid, const char *password);

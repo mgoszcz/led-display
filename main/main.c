@@ -49,6 +49,11 @@ static esp_err_t handle_animation(
     return display_controller_display_animation(data, len, width, height, frame_count, frame_duration_ms, loop);
 }
 
+static esp_err_t wifi_connect_handler(const char *ssid, const char *password)
+{
+    return wifi_app_connect(ssid, password);
+}
+
 void app_main(void)
 {
     const led_matrix_image_t *heart_image = NULL;
@@ -66,7 +71,8 @@ void app_main(void)
         handle_brightness,
         handle_text,
         handle_animation,
-        handle_demo_animation
+        handle_demo_animation,
+        wifi_connect_handler
     ));
     ESP_ERROR_CHECK(esp_mdns_discovery_start());
     

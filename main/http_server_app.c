@@ -18,6 +18,7 @@ static http_brightness_handler_t s_brightness_handler = NULL;
 static http_text_handler_t s_text_handler = NULL;
 static http_demo_animation_handler_t s_demo_animation_handler = NULL;
 static http_animation_handler_t s_animation_handler = NULL;
+static http_wifi_connect_handler_t s_wifi_connect_handler = NULL;
 static uint32_t s_frame_size_bytes;
 static uint16_t s_width;
 static uint16_t s_height;
@@ -407,6 +408,87 @@ static esp_err_t animation_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static esp_err_t wifi_post_handler(httpd_req_t *req) {
+    set_cors_headers(req);
+
+    if (req->content_len == 0 || req->content_len > 256) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON length");
+        return ESP_FAIL;
+    }
+
+    char body[257] = {0};
+
+    size_t received_total = 0;
+
+    while (received_total < req->content_len) {
+        int received = httpd_req_recv(
+            req,
+            body + received_total,
+            req->content_len - received_total
+        );
+
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Request timeout");
+            return ESP_FAIL;
+        }
+
+        if (received <= 0) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive body");
+            return ESP_FAIL;
+        }
+
+        received_total += received;
+    }
+
+    // Null-terminate the string
+    body[received_total] = '\0';
+
+    cJSON *root = cJSON_Parse(body);
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *ssid_json = cJSON_GetObjectItemCaseSensitive(root, "ssid");
+    if (!cJSON_IsString(ssid_json) || ssid_json->valuestring == NULL) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing ssid");
+        return ESP_FAIL;
+    }
+
+    const char *ssid = ssid_json->valuestring;
+
+    const char *password = "";
+
+    cJSON *password_json = cJSON_GetObjectItemCaseSensitive(root, "password");
+    if (password_json != NULL) {
+        if (!cJSON_IsString(password_json) || password_json->valuestring == NULL) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid password");
+            return ESP_FAIL;
+        }
+        password = password_json->valuestring;
+    }
+
+    esp_err_t err = s_wifi_connect_handler(ssid, password);
+    cJSON_Delete(root);
+    if (err == ESP_ERR_INVALID_ARG) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid WiFi credentials");
+        return ESP_FAIL;
+    }
+    if (err == ESP_ERR_INVALID_STATE) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req, "WiFi is not in setup mode");
+    }
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to handle WiFi credentials");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_status(req, "202 Accepted");
+    return httpd_resp_sendstr(req, "WiFi credentials received");
+}
+
 static const httpd_uri_t index_uri = {
     .uri = "/",
     .method = HTTP_GET,
@@ -505,6 +587,31 @@ static const httpd_uri_t demo_animation_options_uri = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t post_wifi_uri = {
+    .uri = "/wifi",
+    .method = HTTP_POST,
+    .handler = wifi_post_handler,
+    .user_ctx = NULL
+};
+
+static const httpd_uri_t *const s_routes[] = {
+    &health_check_uri,
+    &frame_draw_uri,
+    &index_uri,
+    &style_uri,
+    &script_uri,
+    &brightness_uri,
+    &text_uri,
+    &text_options_uri,
+    &get_display_uri,
+    &animation_uri,
+    &animation_options_uri,
+    &demo_animation_uri,
+    &demo_animation_options_uri,
+    &demo_enable_uri,
+    &post_wifi_uri
+};
+
 esp_err_t http_server_app_start(
     uint16_t display_width,
     uint16_t display_height,
@@ -513,7 +620,8 @@ esp_err_t http_server_app_start(
     http_brightness_handler_t brightness_handler,
     http_text_handler_t text_handler,
     http_animation_handler_t animation_handler,
-    http_demo_animation_handler_t demo_animation_handler
+    http_demo_animation_handler_t demo_animation_handler,
+    http_wifi_connect_handler_t wifi_connect_handler
 ) {
     if (frame_handler == NULL) {
         ESP_LOGE(TAG, "Frame handler cannot be NULL");
@@ -539,6 +647,10 @@ esp_err_t http_server_app_start(
         ESP_LOGE(TAG, "Demo animation handler cannot be NULL");
         return ESP_ERR_INVALID_ARG;
     }
+    if (wifi_connect_handler == NULL) {
+        ESP_LOGE(TAG, "WiFi connect handler cannot be NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
     s_frame_size_bytes = display_height * display_width * 3;
     s_width = display_width;
     s_height = display_height;
@@ -548,34 +660,27 @@ esp_err_t http_server_app_start(
     s_text_handler = text_handler;
     s_animation_handler = animation_handler;
     s_demo_animation_handler = demo_animation_handler;
+    s_wifi_connect_handler = wifi_connect_handler;
     if (s_server != NULL) {
         return ESP_OK;
     }
     
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = sizeof(s_routes) / sizeof(s_routes[0]);
     
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &config), TAG, "Failed to start HTTP server");
-    esp_err_t err = httpd_register_uri_handler(s_server, &health_check_uri);
-    esp_err_t err2 = httpd_register_uri_handler(s_server, &frame_draw_uri);
-    esp_err_t err3 = httpd_register_uri_handler(s_server, &index_uri);
-    esp_err_t err4 = httpd_register_uri_handler(s_server, &style_uri);
-    esp_err_t err5 = httpd_register_uri_handler(s_server, &script_uri);
-    esp_err_t err6 = httpd_register_uri_handler(s_server, &brightness_uri);
-    esp_err_t err7 = httpd_register_uri_handler(s_server, &text_uri);
-    esp_err_t err8 = httpd_register_uri_handler(s_server, &text_options_uri);
-    esp_err_t err9 = httpd_register_uri_handler(s_server, &get_display_uri);
-    esp_err_t err10 = httpd_register_uri_handler(s_server, &animation_uri);
-    esp_err_t err11 = httpd_register_uri_handler(s_server, &animation_options_uri);
-    esp_err_t err12 = httpd_register_uri_handler(s_server, &demo_animation_uri);
-    esp_err_t err13 = httpd_register_uri_handler(s_server, &demo_animation_options_uri);
-    esp_err_t err14 = httpd_register_uri_handler(s_server, &demo_enable_uri);
 
-    if (err != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK || err5 != ESP_OK || err6 != ESP_OK || err7 != ESP_OK || err8 != ESP_OK || err9 != ESP_OK || err10 != ESP_OK || err11 != ESP_OK || err12 != ESP_OK || err13 != ESP_OK || err14 != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to register URI handler");
-        httpd_stop(s_server);
-        s_server = NULL;
-        return err != ESP_OK ? err : (err2 != ESP_OK ? err2 : (err3 != ESP_OK ? err3 : (err4 != ESP_OK ? err4 : (err5 != ESP_OK ? err5 : (err6 != ESP_OK ? err6 : (err7 != ESP_OK ? err7 : (err8 != ESP_OK ? err8 : (err9 != ESP_OK ? err9 : (err10 != ESP_OK ? err10 : (err11 != ESP_OK ? err11 : (err12 != ESP_OK ? err12 : (err13 != ESP_OK ? err13 : err14))))))))))));
+    for (size_t i = 0; i < sizeof(s_routes) / sizeof(s_routes[0]); i++) {
+        esp_err_t err = httpd_register_uri_handler(s_server, s_routes[i]);
+
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to register %s: %s",
+                    s_routes[i]->uri, esp_err_to_name(err));
+
+            httpd_stop(s_server);
+            s_server = NULL;
+            return err;
+        }
     }
     return ESP_OK;
 }
