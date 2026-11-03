@@ -154,6 +154,7 @@ static void wifi_event_handler(void *arg,
             esp_err_t ret = wifi_app_lock();
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(ret));
+                return;
             }
             s_wifi_state = WIFI_APP_STATE_DISCONNECTED;
             s_credentials_pending = false;
@@ -385,49 +386,50 @@ esp_err_t wifi_app_connect(const char *ssid, const char *password) {
         return unlock;
     }
 
-    esp_err_t set_mode_err = esp_wifi_set_mode(WIFI_MODE_APSTA);
-    if (set_mode_err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set WiFi mode to APSTA: %s", esp_err_to_name(set_mode_err));
-        esp_err_t lock = wifi_app_lock();
-        if (lock != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(lock));
-            return lock;
-        }
-        s_wifi_state = WIFI_APP_STATE_DISCONNECTED;
-        s_credentials_pending = false;
-        return set_mode_err;
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set WiFi mode to APSTA: %s", esp_err_to_name(err));
+        goto restore_ap;
     }
-    esp_err_t set_config_err = esp_wifi_set_config(WIFI_IF_STA, &s_wifi_config);
-    if (set_config_err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure WiFi STA: %s", esp_err_to_name(set_config_err));
-        esp_err_t lock = wifi_app_lock();
-        if (lock != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(lock));
-            return lock;
-        }
-        s_wifi_state = WIFI_APP_STATE_DISCONNECTED;
-        s_credentials_pending = false;
-        return set_config_err;
+    err = esp_wifi_set_config(WIFI_IF_STA, &s_wifi_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure WiFi STA: %s", esp_err_to_name(err));
+        goto restore_ap;
     }
     
-    esp_err_t err = esp_wifi_connect();
+    err = esp_wifi_connect();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to connect to WiFi: %s", esp_err_to_name(err));
-        ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "Failed to set WiFi mode to AP");
-        esp_err_t lock = wifi_app_lock();
-        if (lock != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(lock));
-            return lock;
-        }
-        s_credentials_pending = false;
-        s_wifi_state = WIFI_APP_STATE_SETUP;
-        esp_err_t unlock = wifi_app_unlock();
-        if (unlock != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to unlock wifi app controller: %s", esp_err_to_name(unlock));
-        }
-        return err;
+        goto restore_ap;
     }
     return ESP_OK;
+
+restore_ap:
+    // Ignore disconnect events from the deliberate rollback to AP mode.
+    lock = wifi_app_lock();
+    if (lock != ESP_OK) {
+        return lock;
+    }
+    s_credentials_pending = false;
+    s_wifi_state = WIFI_APP_STATE_DISCONNECTED;
+    unlock = wifi_app_unlock();
+    if (unlock != ESP_OK) {
+        return unlock;
+    }
+
+    esp_err_t restore_err = esp_wifi_set_mode(WIFI_MODE_AP);
+    if (restore_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to restore WiFi AP mode: %s", esp_err_to_name(restore_err));
+        return restore_err;
+    }
+
+    lock = wifi_app_lock();
+    if (lock != ESP_OK) {
+        return lock;
+    }
+    s_wifi_state = WIFI_APP_STATE_SETUP;
+    unlock = wifi_app_unlock();
+    return unlock != ESP_OK ? unlock : err;
 }
 
 esp_err_t wifi_app_get_status(wifi_app_status_t *out_status) {
