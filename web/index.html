@@ -141,6 +141,25 @@
           <button id="demoButton" type="button">DEMO</button>
         </div>
 
+        <section class="wifi-settings" data-views="settings" hidden>
+          <h2>Wi-Fi</h2>
+          <dl class="wifi-details">
+            <dt>Status</dt><dd id="wifiState">Loading...</dd>
+            <dt>Network</dt><dd id="wifiNetwork">—</dd>
+            <dt>IP address</dt><dd id="wifiIp">—</dd>
+            <dt>Credentials saved</dt><dd id="wifiSaved">—</dd>
+          </dl>
+          <form id="wifiForm" class="wifi-form">
+            <label>SSID<input id="wifiSsid" type="text" required autocomplete="off" autocapitalize="none" spellcheck="false" /></label>
+            <label>Password<input id="wifiPassword" type="password" autocomplete="new-password" /></label>
+            <label class="wifi-password-toggle"><input id="wifiShowPassword" type="checkbox" /> Show password</label>
+            <div class="wifi-actions">
+              <button id="wifiConnect" class="primary" type="submit">CONNECT</button>
+              <button id="wifiRefresh" type="button">REFRESH</button>
+            </div>
+          </form>
+          <p id="wifiMessage" role="status" aria-live="polite"></p>
+        </section>
         <input id="importInput" class="hidden" type="file" accept=".json" />
         <input
           id="animationImportInput"

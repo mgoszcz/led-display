@@ -19,6 +19,7 @@ static http_text_handler_t s_text_handler = NULL;
 static http_demo_animation_handler_t s_demo_animation_handler = NULL;
 static http_animation_handler_t s_animation_handler = NULL;
 static http_wifi_connect_handler_t s_wifi_connect_handler = NULL;
+static http_wifi_get_status_handler_t s_wifi_get_status_handler = NULL;
 static uint32_t s_frame_size_bytes;
 static uint16_t s_width;
 static uint16_t s_height;
@@ -30,6 +31,18 @@ extern const char style_css_start[] asm("_binary_style_css_start");
 extern const char style_css_end[] asm("_binary_style_css_end");
 extern const char script_js_start[] asm("_binary_app_js_start");
 extern const char script_js_end[] asm("_binary_app_js_end");
+
+static const char *wifi_state_to_string(wifi_app_state_t state)
+{
+    switch (state) {
+        case WIFI_APP_STATE_STOPPED:      return "stopped";
+        case WIFI_APP_STATE_CONNECTING:   return "connecting";
+        case WIFI_APP_STATE_CONNECTED:    return "connected";
+        case WIFI_APP_STATE_DISCONNECTED: return "disconnected";
+        case WIFI_APP_STATE_SETUP:        return "setup";
+        default:                         return "unknown";
+    }
+}
 
 static void set_cors_headers(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -489,6 +502,67 @@ static esp_err_t wifi_post_handler(httpd_req_t *req) {
     return httpd_resp_sendstr(req, "WiFi credentials received");
 }
 
+static esp_err_t get_wifi_status_handler(httpd_req_t *req) {
+    wifi_app_status_t status = {0};
+    esp_err_t err = s_wifi_get_status_handler(&status);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to handle WiFi status");
+        return err;
+    }
+    cJSON *json = cJSON_CreateObject();
+    if (json == NULL) {
+        return httpd_resp_send_err(
+            req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create JSON"
+        );
+    }
+    if (cJSON_AddStringToObject(json, "ssid", status.ssid) == NULL) {
+        cJSON_Delete(json);
+        return httpd_resp_send_err(
+            req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to build JSON"
+        );
+    }
+    if (status.ip_address[0] != '\0') {
+        if (cJSON_AddStringToObject(json, "ip", status.ip_address) == NULL) {
+            cJSON_Delete(json);
+            return httpd_resp_send_err(
+                req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to build JSON"
+            );
+        }
+    } else {
+        if (cJSON_AddNullToObject(json, "ip") == NULL) {
+            cJSON_Delete(json);
+            return httpd_resp_send_err(
+                req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to build JSON"
+            );
+        }
+    }
+    if (cJSON_AddBoolToObject(json, "credentials_saved", status.credentials_saved) == NULL) {
+        cJSON_Delete(json);
+        return httpd_resp_send_err(
+            req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to build JSON"
+        );
+    }
+    if (cJSON_AddStringToObject(json, "state", wifi_state_to_string(status.state)) == NULL) {
+        cJSON_Delete(json);
+        return httpd_resp_send_err(
+            req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to build JSON"
+        );
+    }
+    char *json_str = cJSON_PrintUnformatted(json);
+    if (json_str == NULL) {
+        cJSON_Delete(json);
+        return httpd_resp_send_err(
+            req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to serialize JSON"
+        );
+    }
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t result = httpd_resp_sendstr(req, json_str);
+    cJSON_free(json_str);
+    cJSON_Delete(json);
+    return result;
+}
+
 static const httpd_uri_t index_uri = {
     .uri = "/",
     .method = HTTP_GET,
@@ -594,6 +668,13 @@ static const httpd_uri_t post_wifi_uri = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t get_wifi_uri = {
+    .uri = "/wifi",
+    .method = HTTP_GET,
+    .handler = get_wifi_status_handler,
+    .user_ctx = NULL
+};
+
 static const httpd_uri_t *const s_routes[] = {
     &health_check_uri,
     &frame_draw_uri,
@@ -609,7 +690,8 @@ static const httpd_uri_t *const s_routes[] = {
     &demo_animation_uri,
     &demo_animation_options_uri,
     &demo_enable_uri,
-    &post_wifi_uri
+    &post_wifi_uri,
+    &get_wifi_uri
 };
 
 esp_err_t http_server_app_start(
@@ -621,7 +703,8 @@ esp_err_t http_server_app_start(
     http_text_handler_t text_handler,
     http_animation_handler_t animation_handler,
     http_demo_animation_handler_t demo_animation_handler,
-    http_wifi_connect_handler_t wifi_connect_handler
+    http_wifi_connect_handler_t wifi_connect_handler,
+    http_wifi_get_status_handler_t wifi_get_status_handler
 ) {
     if (frame_handler == NULL) {
         ESP_LOGE(TAG, "Frame handler cannot be NULL");
@@ -651,6 +734,10 @@ esp_err_t http_server_app_start(
         ESP_LOGE(TAG, "WiFi connect handler cannot be NULL");
         return ESP_ERR_INVALID_ARG;
     }
+    if (wifi_get_status_handler == NULL) {
+        ESP_LOGE(TAG, "WiFi get status handler cannot be NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
     s_frame_size_bytes = display_height * display_width * 3;
     s_width = display_width;
     s_height = display_height;
@@ -661,6 +748,7 @@ esp_err_t http_server_app_start(
     s_animation_handler = animation_handler;
     s_demo_animation_handler = demo_animation_handler;
     s_wifi_connect_handler = wifi_connect_handler;
+    s_wifi_get_status_handler = wifi_get_status_handler;
     if (s_server != NULL) {
         return ESP_OK;
     }

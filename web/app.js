@@ -1165,7 +1165,107 @@ function setupViews() {
   matrixSizeInput.disabled = true;
 }
 
+let wifiPollTimer = null;
+let wifiPollGeneration = 0;
+let wifiSubmitting = false;
+let wifiTrialActive = false;
+
+async function wifiRequest(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    cache: "no-store",
+    signal: AbortSignal.timeout(8000),
+  });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`${response.status}: ${body || response.statusText}`);
+  return body;
+}
+
+function stopWifiPolling() {
+  clearTimeout(wifiPollTimer);
+  wifiPollTimer = null;
+  wifiPollGeneration++;
+}
+
+function startWifiPolling() {
+  stopWifiPolling();
+  const generation = wifiPollGeneration;
+  async function poll() {
+    try {
+      const status = JSON.parse(await wifiRequest("/wifi"));
+      if (generation !== wifiPollGeneration) return;
+      if (!status || typeof status.state !== "string") throw new Error("Invalid Wi-Fi status");
+      document.getElementById("wifiState").textContent = status.state;
+      document.getElementById("wifiNetwork").textContent = status.ssid || "-";
+      document.getElementById("wifiIp").textContent = status.ip || "-";
+      document.getElementById("wifiSaved").textContent = status.credentials_saved ? "Yes" : "No";
+      document.getElementById("wifiConnect").disabled = wifiSubmitting || status.state !== "setup";
+      const message = document.getElementById("wifiMessage");
+      if (status.state === "connected") {
+        message.textContent = status.credentials_saved
+          ? `Connected and saved. After restarting, open http://led-display.local on your home network. IP: ${status.ip || "-"}.`
+          : "Connected, but credentials are not saved yet.";
+        if (status.credentials_saved) wifiTrialActive = false;
+      } else if (status.state === "connecting") {
+        message.textContent = "Connecting...";
+      } else if (status.state === "setup") {
+        message.textContent = wifiTrialActive
+          ? "Connection did not complete. Check the credentials and try again."
+          : "";
+        wifiTrialActive = false;
+      } else {
+        message.textContent = "Wi-Fi is unavailable. Refresh to check again.";
+      }
+    } catch (error) {
+      if (generation !== wifiPollGeneration) return;
+      document.getElementById("wifiMessage").textContent = `Cannot read Wi-Fi status: ${error.message}. Stay connected to the display setup network; retrying...`;
+      document.getElementById("wifiConnect").disabled = true;
+    }
+    if (generation === wifiPollGeneration && currentView === "settings") {
+      wifiPollTimer = setTimeout(poll, 2000);
+    }
+  }
+  poll();
+}
+
+document.getElementById("wifiForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (wifiSubmitting) return;
+  const ssid = document.getElementById("wifiSsid").value;
+  const password = document.getElementById("wifiPassword").value;
+  const bytes = new TextEncoder();
+  const message = document.getElementById("wifiMessage");
+  if (!ssid || bytes.encode(ssid).length > 32 || bytes.encode(password).length > 63) {
+    message.textContent = "SSID must contain 1-32 bytes; password may contain up to 63 bytes.";
+    return;
+  }
+  wifiSubmitting = true;
+  document.getElementById("wifiConnect").disabled = true;
+  stopWifiPolling();
+  message.textContent = "Starting connection...";
+  try {
+    await wifiRequest("/wifi", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ssid, password }),
+    });
+    wifiTrialActive = true;
+    document.getElementById("wifiPassword").value = "";
+    message.textContent = "Connection attempt started.";
+  } catch (error) {
+    message.textContent = `Could not confirm the request: ${error.message}. Refresh to check its result.`;
+  } finally {
+    wifiSubmitting = false;
+    if (currentView === "settings") startWifiPolling();
+  }
+});
+document.getElementById("wifiRefresh").addEventListener("click", startWifiPolling);
+document.getElementById("wifiShowPassword").addEventListener("change", (event) => {
+  document.getElementById("wifiPassword").type = event.target.checked ? "text" : "password";
+});
+
 function showView() {
+  stopWifiPolling();
   stopAnimationPreview();
   clearSelection();
   const requested = location.hash.replace(/^#\//, "") || "home";
@@ -1181,6 +1281,7 @@ function showView() {
   document.querySelector(".editor").hidden = !["frame", "animation"].includes(currentView);
   sendButton.hidden = currentView !== "frame";
   renderPixelsToGrid(pixels);
+  if (currentView === "settings") startWifiPolling();
 }
 
 setupViews();

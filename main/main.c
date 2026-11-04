@@ -3,6 +3,7 @@
 #include "http_server_app.h"
 #include "display_controller.h"
 #include "network_discovery.h"
+#include "wifi_types.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -54,6 +55,10 @@ static esp_err_t wifi_connect_handler(const char *ssid, const char *password)
     return wifi_app_connect(ssid, password);
 }
 
+static esp_err_t wifi_get_status_handler(wifi_app_status_t *out_status) {
+    return wifi_app_get_status(out_status);
+}
+
 void app_main(void)
 {
     const led_matrix_image_t *heart_image = NULL;
@@ -72,7 +77,8 @@ void app_main(void)
         handle_text,
         handle_animation,
         handle_demo_animation,
-        wifi_connect_handler
+        wifi_connect_handler,
+        wifi_get_status_handler
     ));
     ESP_ERROR_CHECK(esp_mdns_discovery_start());
     

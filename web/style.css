@@ -6,6 +6,17 @@
 }
 
 [hidden] { display: none !important; }
+.wifi-settings { min-width: 0; padding: 12px 0; }
+.wifi-settings h2 { font-size: 18px; margin: 0 0 16px; }
+.wifi-details { display: grid; grid-template-columns: minmax(100px, 160px) minmax(0, 1fr); gap: 10px 16px; margin: 0 0 24px; font-size: 14px; }
+.wifi-details dt { color: #bdbdbd; }
+.wifi-details dd { margin: 0; overflow-wrap: anywhere; }
+.wifi-form { display: grid; gap: 14px; max-width: 420px; }
+.wifi-form input[type="text"], .wifi-form input[type="password"] { width: 100%; min-width: 0; min-height: 44px; padding: 0 10px; border: 1px solid #444; border-radius: 6px; background: #111; color: #fff; font: inherit; }
+.wifi-password-toggle { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.wifi-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+#wifiMessage { overflow-wrap: anywhere; line-height: 1.5; }
+button:disabled { opacity: 0.5; cursor: default; }
 .app-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; border-bottom: 1px solid #444; padding-bottom: 18px; }
 .home-link { color: #fff; font-size: 24px; font-weight: 700; text-decoration: none; }
 .view-heading { display: flex; align-items: center; gap: 16px; }
