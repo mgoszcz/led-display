@@ -20,6 +20,8 @@ static http_demo_animation_handler_t s_demo_animation_handler = NULL;
 static http_animation_handler_t s_animation_handler = NULL;
 static http_wifi_connect_handler_t s_wifi_connect_handler = NULL;
 static http_wifi_get_status_handler_t s_wifi_get_status_handler = NULL;
+static http_wifi_clear_handler_t s_wifi_clear_handler = NULL;
+static http_wifi_switch_to_ap_handler_t s_wifi_switch_to_ap_handler = NULL;
 static uint32_t s_frame_size_bytes;
 static uint16_t s_width;
 static uint16_t s_height;
@@ -40,6 +42,8 @@ static const char *wifi_state_to_string(wifi_app_state_t state)
         case WIFI_APP_STATE_CONNECTED:    return "connected";
         case WIFI_APP_STATE_DISCONNECTED: return "disconnected";
         case WIFI_APP_STATE_SETUP:        return "setup";
+        case WIFI_APP_STATE_RESETTING:    return "resetting";
+        case WIFI_APP_STATE_ERROR:        return "error";
         default:                         return "unknown";
     }
 }
@@ -563,6 +567,28 @@ static esp_err_t get_wifi_status_handler(httpd_req_t *req) {
     return result;
 }
 
+static esp_err_t wifi_clear_handler(httpd_req_t *req) {
+    esp_err_t clear_err =  s_wifi_clear_handler();
+    if (clear_err != ESP_OK) {
+        if (clear_err == ESP_ERR_INVALID_STATE) {
+            httpd_resp_set_status(req, "409 Conflict");
+            return httpd_resp_sendstr(req, "WiFi is not in proper state");
+        }
+        return httpd_resp_send_err(
+            req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to clear wifi data"
+        );
+    }
+    httpd_resp_set_status(req, "204 No Content");
+    esp_err_t response_err = httpd_resp_send(req, NULL, 0);
+    esp_err_t switch_err = s_wifi_switch_to_ap_handler();
+    if (switch_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to switch to AP: %s",
+                esp_err_to_name(switch_err));
+    }
+
+    return response_err;
+}
+
 static const httpd_uri_t index_uri = {
     .uri = "/",
     .method = HTTP_GET,
@@ -675,6 +701,13 @@ static const httpd_uri_t get_wifi_uri = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t clear_wifi_uri = {
+    .uri = "/wifi",
+    .method = HTTP_DELETE,
+    .handler = wifi_clear_handler,
+    .user_ctx = NULL
+};
+
 static const httpd_uri_t *const s_routes[] = {
     &health_check_uri,
     &frame_draw_uri,
@@ -691,7 +724,8 @@ static const httpd_uri_t *const s_routes[] = {
     &demo_animation_options_uri,
     &demo_enable_uri,
     &post_wifi_uri,
-    &get_wifi_uri
+    &get_wifi_uri,
+    &clear_wifi_uri
 };
 
 esp_err_t http_server_app_start(
@@ -704,7 +738,9 @@ esp_err_t http_server_app_start(
     http_animation_handler_t animation_handler,
     http_demo_animation_handler_t demo_animation_handler,
     http_wifi_connect_handler_t wifi_connect_handler,
-    http_wifi_get_status_handler_t wifi_get_status_handler
+    http_wifi_get_status_handler_t wifi_get_status_handler,
+    http_wifi_clear_handler_t wifi_clear_handler,
+    http_wifi_switch_to_ap_handler_t wifi_switch_to_ap_handler
 ) {
     if (frame_handler == NULL) {
         ESP_LOGE(TAG, "Frame handler cannot be NULL");
@@ -738,6 +774,14 @@ esp_err_t http_server_app_start(
         ESP_LOGE(TAG, "WiFi get status handler cannot be NULL");
         return ESP_ERR_INVALID_ARG;
     }
+    if (wifi_clear_handler == NULL) {
+        ESP_LOGE(TAG, "WiFi clear handler cannot be NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (wifi_switch_to_ap_handler == NULL) {
+        ESP_LOGE(TAG, "WiFi switch to ap handler cannot be NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
     s_frame_size_bytes = display_height * display_width * 3;
     s_width = display_width;
     s_height = display_height;
@@ -749,6 +793,8 @@ esp_err_t http_server_app_start(
     s_demo_animation_handler = demo_animation_handler;
     s_wifi_connect_handler = wifi_connect_handler;
     s_wifi_get_status_handler = wifi_get_status_handler;
+    s_wifi_clear_handler = wifi_clear_handler;
+    s_wifi_switch_to_ap_handler = wifi_switch_to_ap_handler;
     if (s_server != NULL) {
         return ESP_OK;
     }

@@ -17,6 +17,7 @@
 .wifi-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 #wifiMessage { overflow-wrap: anywhere; line-height: 1.5; }
 button:disabled { opacity: 0.5; cursor: default; }
+button.danger { border-color: #b95656; color: #ffaaaa; }
 .app-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; border-bottom: 1px solid #444; padding-bottom: 18px; }
 .home-link { color: #fff; font-size: 24px; font-weight: 700; text-decoration: none; }
 .view-heading { display: flex; align-items: center; gap: 16px; }

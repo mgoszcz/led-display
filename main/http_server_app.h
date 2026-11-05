@@ -22,6 +22,8 @@ typedef esp_err_t (*http_animation_handler_t)(
 typedef esp_err_t (*http_demo_animation_handler_t)(void);
 typedef esp_err_t (*http_wifi_connect_handler_t)(const char *ssid, const char *password);
 typedef esp_err_t (*http_wifi_get_status_handler_t)(wifi_app_status_t *out_status);
+typedef esp_err_t (*http_wifi_clear_handler_t)(void);
+typedef esp_err_t (*http_wifi_switch_to_ap_handler_t)(void);
 
 
 esp_err_t http_server_app_start(
@@ -34,5 +36,7 @@ esp_err_t http_server_app_start(
     http_animation_handler_t animation_handler,
     http_demo_animation_handler_t demo_animation_handler,
     http_wifi_connect_handler_t wifi_connect_handler,
-    http_wifi_get_status_handler_t wifi_get_status_handler
+    http_wifi_get_status_handler_t wifi_get_status_handler,
+    http_wifi_clear_handler_t wifi_clear_handler,
+    http_wifi_switch_to_ap_handler_t wifi_switch_to_ap_handler
 );

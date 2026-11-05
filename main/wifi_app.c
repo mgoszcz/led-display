@@ -94,6 +94,17 @@ static esp_err_t restart_wifi_to_ap(void) {
         ESP_LOGE(TAG, "Stopping wifi failed: %s", esp_err_to_name(wifi_stop));
         return wifi_stop;
     }
+    esp_err_t lock = wifi_app_lock();
+    if (lock != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(lock));
+        return lock;
+    }
+    s_ip_address[0] = '\0';
+    esp_err_t unlock = wifi_app_unlock();
+    if (unlock != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to unlock wifi app controller: %s", esp_err_to_name(unlock));
+        return unlock;
+    }
     esp_err_t ap_start = wifi_app_start_setup();
     if (ap_start != ESP_OK) {
         ESP_LOGE(TAG, "Starting WiFi in AP mode failed: %s", esp_err_to_name(ap_start));
@@ -170,13 +181,21 @@ static void wifi_event_handler(void *arg,
     }
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
-        s_retry_count = 0;
         esp_err_t ret = wifi_app_lock();
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(ret));
             return;
         }
+        if (s_wifi_state != WIFI_APP_STATE_CONNECTING &&
+            s_wifi_state != WIFI_APP_STATE_CONNECTED) {
+                esp_err_t unlock = wifi_app_unlock();
+                if (unlock != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to unlock wifi app controller: %s", esp_err_to_name(unlock));
+                }
+                return;
+        }
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
+        s_retry_count = 0;
         s_wifi_state = WIFI_APP_STATE_CONNECTED;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         snprintf(s_ip_address, 16, IPSTR, IP2STR(&event->ip_info.ip));
@@ -448,4 +467,81 @@ esp_err_t wifi_app_get_status(wifi_app_status_t *out_status) {
         sizeof(out_status->ip_address));
     esp_err_t unlock = wifi_app_unlock();
     return unlock;
+}
+
+esp_err_t wifi_app_clear(void) {
+    wifi_app_state_t current_state;
+    esp_err_t lock = wifi_app_lock();
+    if (lock != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(lock));
+        return lock;
+    }
+    current_state = s_wifi_state;
+    if (current_state == WIFI_APP_STATE_CONNECTING || current_state == WIFI_APP_STATE_RESETTING || s_credentials_pending == true) {
+        esp_err_t unlock = wifi_app_unlock();
+        if (unlock != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(unlock));
+            return unlock;
+        }
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_wifi_state = WIFI_APP_STATE_RESETTING;
+    esp_err_t unlock = wifi_app_unlock();
+    if (unlock != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to unlock wifi app controller: %s", esp_err_to_name(unlock));
+        return unlock;
+    }
+    esp_err_t clear_err = wifi_config_store_clear();
+    lock = wifi_app_lock();
+    if (lock != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(lock));
+        return lock;
+    }
+    if (clear_err == ESP_OK) {
+        s_ssid[0] = '\0';
+        s_password[0] = '\0';
+        memset(&s_wifi_config, 0, sizeof(s_wifi_config));
+        s_credentials_pending = false;
+        s_credentials_saved = false;
+    } else {
+        s_wifi_state = current_state;
+    }
+    unlock = wifi_app_unlock();
+    if (unlock != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to unlock wifi app controller: %s", esp_err_to_name(unlock));
+        return unlock;
+    }
+    return clear_err;
+}
+
+esp_err_t wifi_app_switch_to_ap(void) {
+    esp_err_t lock = wifi_app_lock();
+    if (lock != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(lock));
+        return lock;
+    }
+    wifi_app_state_t current_state = s_wifi_state;
+    esp_err_t unlock = wifi_app_unlock();
+    if (unlock != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(unlock));
+        return unlock;
+    }
+    if (current_state != WIFI_APP_STATE_RESETTING) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t restart_err = restart_wifi_to_ap();
+    if (restart_err != ESP_OK) {
+        lock = wifi_app_lock();
+        if (lock != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(lock));
+            return lock;
+        }
+        s_wifi_state = WIFI_APP_STATE_ERROR;
+        esp_err_t unlock = wifi_app_unlock();
+        if (unlock != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(unlock));
+            return unlock;
+        }
+    }
+    return restart_err;
 }

@@ -1169,6 +1169,7 @@ let wifiPollTimer = null;
 let wifiPollGeneration = 0;
 let wifiSubmitting = false;
 let wifiTrialActive = false;
+let wifiForgetNotice = "";
 
 async function wifiRequest(path, options = {}) {
   const response = await fetch(path, {
@@ -1177,7 +1178,11 @@ async function wifiRequest(path, options = {}) {
     signal: AbortSignal.timeout(8000),
   });
   const body = await response.text();
-  if (!response.ok) throw new Error(`${response.status}: ${body || response.statusText}`);
+  if (!response.ok) {
+    const error = new Error(`${response.status}: ${body || response.statusText}`);
+    error.status = response.status;
+    throw error;
+  }
   return body;
 }
 
@@ -1200,6 +1205,7 @@ function startWifiPolling() {
       document.getElementById("wifiIp").textContent = status.ip || "-";
       document.getElementById("wifiSaved").textContent = status.credentials_saved ? "Yes" : "No";
       document.getElementById("wifiConnect").disabled = wifiSubmitting || status.state !== "setup";
+      document.getElementById("wifiForget").disabled = wifiSubmitting || !["setup", "connected"].includes(status.state) || (status.state === "connected" && !status.credentials_saved);
       const message = document.getElementById("wifiMessage");
       if (status.state === "connected") {
         message.textContent = status.credentials_saved
@@ -1211,7 +1217,7 @@ function startWifiPolling() {
       } else if (status.state === "setup") {
         message.textContent = wifiTrialActive
           ? "Connection did not complete. Check the credentials and try again."
-          : "";
+          : wifiForgetNotice;
         wifiTrialActive = false;
       } else {
         message.textContent = "Wi-Fi is unavailable. Refresh to check again.";
@@ -1220,6 +1226,8 @@ function startWifiPolling() {
       if (generation !== wifiPollGeneration) return;
       document.getElementById("wifiMessage").textContent = `Cannot read Wi-Fi status: ${error.message}. Stay connected to the display setup network; retrying...`;
       document.getElementById("wifiConnect").disabled = true;
+      document.getElementById("wifiForget").disabled = true;
+      if (wifiForgetNotice) document.getElementById("wifiMessage").textContent = wifiForgetNotice;
     }
     if (generation === wifiPollGeneration && currentView === "settings") {
       wifiPollTimer = setTimeout(poll, 2000);
@@ -1240,7 +1248,9 @@ document.getElementById("wifiForm").addEventListener("submit", async (event) => 
     return;
   }
   wifiSubmitting = true;
+  wifiForgetNotice = "";
   document.getElementById("wifiConnect").disabled = true;
+  document.getElementById("wifiForget").disabled = true;
   stopWifiPolling();
   message.textContent = "Starting connection...";
   try {
@@ -1260,6 +1270,36 @@ document.getElementById("wifiForm").addEventListener("submit", async (event) => 
   }
 });
 document.getElementById("wifiRefresh").addEventListener("click", startWifiPolling);
+document.getElementById("wifiForget").addEventListener("click", async () => {
+  if (wifiSubmitting || !window.confirm("Forget the saved Wi-Fi network? The display will switch to LED-display-Setup and disconnect from your home network.")) return;
+  wifiSubmitting = true;
+  stopWifiPolling();
+  document.getElementById("wifiConnect").disabled = true;
+  document.getElementById("wifiForget").disabled = true;
+  const message = document.getElementById("wifiMessage");
+  message.textContent = "Forgetting network...";
+  try {
+    await wifiRequest("/wifi", { method: "DELETE" });
+    wifiTrialActive = false;
+    document.getElementById("wifiSsid").value = "";
+    document.getElementById("wifiPassword").value = "";
+    document.getElementById("wifiState").textContent = "resetting";
+    document.getElementById("wifiSaved").textContent = "No";
+    document.getElementById("wifiNetwork").textContent = "-";
+    document.getElementById("wifiIp").textContent = "-";
+    wifiForgetNotice = "Saved network removed. Connect to LED-display-Setup and open http://192.168.4.1/#/settings.";
+  } catch (error) {
+    wifiForgetNotice = error.status
+      ? `Could not forget network: ${error.message}`
+      : "Connection interrupted; removal could not be confirmed. Check for LED-display-Setup and open http://192.168.4.1/#/settings to verify the status.";
+  } finally {
+    message.textContent = wifiForgetNotice;
+    wifiSubmitting = false;
+    if (currentView === "settings") {
+      wifiPollTimer = setTimeout(startWifiPolling, 2000);
+    }
+  }
+});
 document.getElementById("wifiShowPassword").addEventListener("change", (event) => {
   document.getElementById("wifiPassword").type = event.target.checked ? "text" : "password";
 });

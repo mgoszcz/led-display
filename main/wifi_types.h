@@ -8,6 +8,8 @@ typedef enum {
     WIFI_APP_STATE_CONNECTED,
     WIFI_APP_STATE_DISCONNECTED,
     WIFI_APP_STATE_SETUP,
+    WIFI_APP_STATE_RESETTING,
+    WIFI_APP_STATE_ERROR,
 } wifi_app_state_t;
 
 typedef struct {

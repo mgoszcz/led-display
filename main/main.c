@@ -59,6 +59,14 @@ static esp_err_t wifi_get_status_handler(wifi_app_status_t *out_status) {
     return wifi_app_get_status(out_status);
 }
 
+static esp_err_t wifi_clear_data_handler(void) {
+    return wifi_app_clear();
+}
+
+static esp_err_t wifi_switch_to_ap_handler(void) {
+    return wifi_app_switch_to_ap();
+}
+
 void app_main(void)
 {
     const led_matrix_image_t *heart_image = NULL;
@@ -78,7 +86,9 @@ void app_main(void)
         handle_animation,
         handle_demo_animation,
         wifi_connect_handler,
-        wifi_get_status_handler
+        wifi_get_status_handler,
+        wifi_clear_data_handler,
+        wifi_switch_to_ap_handler
     ));
     ESP_ERROR_CHECK(esp_mdns_discovery_start());
     
