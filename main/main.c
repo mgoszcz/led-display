@@ -8,9 +8,18 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_check.h"
+#include<stdbool.h>
 
 #define DISPLAY_WIDTH 32
 #define DISPLAY_HEIGHT 16
+
+static bool s_display_setup_text_started = false;
+static const char *TAG = "MAIN";
+static const text_display_config_t display_ap_text = {
+    .color = ((rgb_t){0, 0, 255}),
+    .speed_ms = 100,
+    .text = "Connect to SSID: LED-display-Setup. open: http://192.168.4.1"
+};
 
 static esp_err_t handle_frame_upload(const uint8_t *data, size_t len)
 {
@@ -67,11 +76,32 @@ static esp_err_t wifi_switch_to_ap_handler(void) {
     return wifi_app_switch_to_ap();
 }
 
+static esp_err_t wifi_display_ap(void) {
+    wifi_app_status_t current_status = {0};
+    ESP_RETURN_ON_ERROR(wifi_app_get_status(&current_status), TAG, "Failed to get wifi status");
+    if (s_display_setup_text_started && current_status.state == WIFI_APP_STATE_CONNECTED) {
+        if (display_controller_get_mode() == DISPLAY_MODE_TEXT) {
+            ESP_RETURN_ON_ERROR(display_controller_start_demo(), TAG, "Failed to start displaying demo");
+        }
+        s_display_setup_text_started = false;
+        return ESP_OK;
+    }
+    if (!s_display_setup_text_started && current_status.state == WIFI_APP_STATE_SETUP) {
+        ESP_RETURN_ON_ERROR(display_controller_display_text(&display_ap_text), TAG, "Failed to display Setup text");
+        s_display_setup_text_started = true;
+        return ESP_OK;
+    }
+    return ESP_OK;
+}
+
 void app_main(void)
 {
     const led_matrix_image_t *heart_image = NULL;
     const led_matrix_image_t *smile_image = NULL;
     const led_matrix_image_t *lightning_image = NULL;
+    int i = 0;
+    TickType_t last_demo_tick = 0;
+    bool demo_image_shown = false;
 
     ESP_ERROR_CHECK(display_controller_init(DISPLAY_WIDTH, DISPLAY_HEIGHT));
     
@@ -95,14 +125,21 @@ void app_main(void)
     ESP_ERROR_CHECK(image_store_get("smile", &smile_image));
     ESP_ERROR_CHECK(image_store_get("lightning", &lightning_image));
     ESP_ERROR_CHECK(image_store_get("heart", &heart_image));
+    const led_matrix_image_t *demo_images[3] = {heart_image, lightning_image, smile_image};
 
     while (1) {
-        ESP_ERROR_CHECK(display_controller_display_demo_image(smile_image));
-        ESP_ERROR_CHECK(display_controller_display_demo_image(lightning_image));
-        ESP_ERROR_CHECK(display_controller_display_demo_image(heart_image));
+        ESP_ERROR_CHECK(wifi_display_ap());
 
-        if (display_controller_get_mode() != DISPLAY_MODE_DEMO) {
-            vTaskDelay(pdMS_TO_TICKS(100));
+        if (display_controller_get_mode() == DISPLAY_MODE_DEMO) {
+            TickType_t now = xTaskGetTickCount();
+            if (!demo_image_shown || now - last_demo_tick >= pdMS_TO_TICKS(5000)) {
+                ESP_ERROR_CHECK(display_controller_display_demo_image(demo_images[i]));
+                demo_image_shown = true;
+                i = (i + 1) % 3;
+                last_demo_tick = now;
+            }
         }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

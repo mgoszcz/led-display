@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "esp_timer.h"
 
 #define WIFI_MAX_RETRY CONFIG_WIFI_MAX_RETRY
 
@@ -26,6 +28,9 @@ static esp_netif_t *s_ap_netif = NULL;
 static char s_ip_address[16] = {0};
 static bool s_credentials_saved = false;
 static SemaphoreHandle_t s_wifi_app_mutex = NULL;
+static esp_timer_handle_t s_ap_timer;
+static TaskHandle_t s_ap_task_handle = NULL;
+static int64_t s_ap_shutdown_at_us = 0;
 
 static esp_err_t wifi_app_init_nvs(void)
 {
@@ -37,6 +42,12 @@ static esp_err_t wifi_app_init_nvs(void)
     }
 
     return err;
+}
+
+static void ap_timer_fallback(void *arg) {
+    if (s_ap_task_handle != NULL) {
+        xTaskNotifyGive(s_ap_task_handle);
+    }
 }
 
 static esp_err_t wifi_app_lock(void) {
@@ -57,6 +68,48 @@ static esp_err_t wifi_app_unlock(void) {
         return ESP_ERR_INVALID_STATE;
     }
     return ESP_OK;
+}
+
+
+static void ap_switch_off_task(void *arg)
+{
+    while (1) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        bool should_disable_ap = true;
+        wifi_mode_t mode;
+        esp_err_t mode_err = esp_wifi_get_mode(&mode);
+        if (mode_err) {
+            ESP_LOGE(TAG, "Failed to get WiFi mode: %s", esp_err_to_name(mode_err));
+            continue;
+        }
+        esp_err_t lock = wifi_app_lock();
+        if (lock != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(lock));
+            continue;
+        }
+        if (s_ap_shutdown_at_us == 0 || esp_timer_get_time() < s_ap_shutdown_at_us) {
+            should_disable_ap = false;
+        }
+        if (s_wifi_state != WIFI_APP_STATE_CONNECTED) {
+            should_disable_ap = false;
+        }
+
+        if(!s_credentials_saved) {
+            should_disable_ap = false;
+        }
+
+        if (mode != WIFI_MODE_APSTA) {
+            should_disable_ap = false;
+        }
+        ESP_ERROR_CHECK(wifi_app_unlock());
+        if (!should_disable_ap) {
+            continue;
+        }
+        esp_err_t set_mode_err = esp_wifi_set_mode(WIFI_MODE_STA);
+        if (set_mode_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to disable AP: %s", esp_err_to_name(set_mode_err));
+        }
+    }
 }
 
 static esp_err_t wifi_app_start_setup(void) {
@@ -124,6 +177,7 @@ static void wifi_event_handler(void *arg,
             ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(ret));
             return;
         }
+        s_ap_shutdown_at_us = 0;
         if (s_wifi_state != WIFI_APP_STATE_CONNECTING &&
             s_wifi_state != WIFI_APP_STATE_CONNECTED) {
                 esp_err_t unlock = wifi_app_unlock();
@@ -137,6 +191,10 @@ static void wifi_event_handler(void *arg,
         esp_err_t unlock = wifi_app_unlock();
         if (unlock != ESP_OK) {
             ESP_LOGE(TAG, "Failed to unlock wifi app controller: %s", esp_err_to_name(unlock));
+        }
+        esp_err_t err = esp_timer_stop(s_ap_timer);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "Failed to stop AP timer: %s", esp_err_to_name(err));
         }
         if (s_retry_count < WIFI_MAX_RETRY) {
             s_retry_count++;
@@ -181,6 +239,7 @@ static void wifi_event_handler(void *arg,
     }
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        bool schedule_ap_shutdown = false;
         esp_err_t ret = wifi_app_lock();
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to lock wifi app controller: %s", esp_err_to_name(ret));
@@ -218,11 +277,21 @@ static void wifi_event_handler(void *arg,
                 ESP_LOGI(TAG, "WiFi credentials saved successfully.");
                 s_credentials_pending = false;
                 s_credentials_saved = true;
+                schedule_ap_shutdown = true;
+                s_ap_shutdown_at_us = esp_timer_get_time() + 5000000;
             }
         }
         esp_err_t unlock = wifi_app_unlock();
         if (unlock != ESP_OK) {
             ESP_LOGE(TAG, "Failed to unlock wifi app controller: %s", esp_err_to_name(unlock));
+            return;
+        }
+        if (schedule_ap_shutdown) {
+            esp_err_t timer_err = esp_timer_start_once(s_ap_timer, 5000000ULL);
+            if (timer_err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to schedule AP shutdown: %s",
+                        esp_err_to_name(timer_err));
+            }
         }
     }
 }
@@ -262,6 +331,17 @@ static esp_err_t wifi_app_init(void)
         "Failed to register IP event handler"
     );
 
+    const esp_timer_create_args_t timer_args = {
+        .callback = &ap_timer_fallback,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "ap_timer"
+    };
+
+    ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &s_ap_timer), TAG, "Failed to create timer");
+    if (xTaskCreate(ap_switch_off_task, "ap_task", 4096, NULL, 5, &s_ap_task_handle) != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
 }
 
@@ -503,6 +583,7 @@ esp_err_t wifi_app_clear(void) {
         memset(&s_wifi_config, 0, sizeof(s_wifi_config));
         s_credentials_pending = false;
         s_credentials_saved = false;
+        s_ap_shutdown_at_us = 0;
     } else {
         s_wifi_state = current_state;
     }
@@ -510,6 +591,12 @@ esp_err_t wifi_app_clear(void) {
     if (unlock != ESP_OK) {
         ESP_LOGE(TAG, "Failed to unlock wifi app controller: %s", esp_err_to_name(unlock));
         return unlock;
+    }
+    if (clear_err == ESP_OK) {
+        esp_err_t err = esp_timer_stop(s_ap_timer);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "Failed to stop AP timer: %s", esp_err_to_name(err));
+        }
     }
     return clear_err;
 }

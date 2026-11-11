@@ -19,16 +19,6 @@ static rgb_t s_framebuffer_pixels[DISPLAY_MAX_PIXELS];
 static uint16_t s_display_width;
 static uint16_t s_display_height;
 
-static void demo_delay(void)
-{
-    for (int i = 0; i < 50; i++) {
-        if (s_display_mode != DISPLAY_MODE_DEMO) {
-            return;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-}
 
 esp_err_t display_controller_init(uint16_t width, uint16_t height) {
     if (width == 0 || height == 0 || width > DISPLAY_MAX_WIDTH || height > DISPLAY_MAX_HEIGHT) {
@@ -153,7 +143,6 @@ esp_err_t display_controller_display_demo_image(const led_matrix_image_t *image)
         ESP_LOGE(TAG, "Failed to display demo image: %s", esp_err_to_name(ret));
         return ret;
     }
-    demo_delay();
     return ESP_OK;
 }
 
