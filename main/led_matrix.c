@@ -45,8 +45,14 @@ static int xy_to_index(int x, int y)
 
     int panels_x = s_config.width / PANEL_WIDTH;
 
-    int panel_index = panel_y * panels_x + panel_x;
+    int panel_index = panel_y * panels_x;
 
+    if (panel_y % 2 == 0) {
+        panel_index += panel_x;
+    } else {
+        panel_index += panels_x - 1 - panel_x;
+    }
+    
     int local_index;
     if (s_config.layout == LED_MATRIX_LAYOUT_SERPENTINE && local_y % 2 == 1) {
         local_index = local_y * PANEL_WIDTH + (PANEL_WIDTH - 1 - local_x);

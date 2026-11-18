@@ -8,7 +8,7 @@
 #include "display_config.h"
 
 
-#define TEXT_JSON_MAX_LEN 256
+#define TEXT_JSON_MAX_LEN 2048
 
 static const char *TAG = "HTTP_SERVER_APP";
 static httpd_handle_t s_server = NULL;
@@ -26,6 +26,8 @@ static uint32_t s_frame_size_bytes;
 static uint16_t s_width;
 static uint16_t s_height;
 static uint8_t s_animation_upload_buffer[UPLOADED_ANIMATION_MAX_PIXELS * 3];
+static uint8_t s_frame_upload_buffer[DISPLAY_MAX_PIXELS * 3];
+static char s_text_json_buffer[TEXT_JSON_MAX_LEN + 1];
 
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
@@ -115,14 +117,18 @@ static esp_err_t frame_draw_handler(httpd_req_t *req) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content length");
         return ESP_FAIL;
     }
-    uint8_t frame_data[s_frame_size_bytes];
-
+    if (s_frame_size_bytes > sizeof(s_frame_upload_buffer)) {
+ 
+        return httpd_resp_send_err(
+            req, HTTPD_500_INTERNAL_SERVER_ERROR, "Frame exceeds buffer capacity"
+        );
+    }
     size_t received_total = 0;
 
     while (received_total < s_frame_size_bytes) {
         int received = httpd_req_recv(
             req,
-            (char *)frame_data + received_total,
+            (char *)s_frame_upload_buffer + received_total,
             s_frame_size_bytes - received_total
         );
 
@@ -139,7 +145,7 @@ static esp_err_t frame_draw_handler(httpd_req_t *req) {
         received_total += received;
     }
 
-    esp_err_t err = s_frame_handler(frame_data, s_frame_size_bytes);
+    esp_err_t err = s_frame_handler(s_frame_upload_buffer, s_frame_size_bytes);
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to handle frame");
         return ESP_FAIL;
@@ -223,14 +229,12 @@ static esp_err_t text_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    char body[TEXT_JSON_MAX_LEN + 1] = {0};
-
     size_t received_total = 0;
 
     while (received_total < req->content_len) {
         int received = httpd_req_recv(
             req,
-            body + received_total,
+            s_text_json_buffer + received_total,
             req->content_len - received_total
         );
 
@@ -248,22 +252,38 @@ static esp_err_t text_handler(httpd_req_t *req) {
     }
 
     // Null-terminate the string
-    body[received_total] = '\0';
+    s_text_json_buffer[received_total] = '\0';
 
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = cJSON_Parse(s_text_json_buffer);
     if (root == NULL) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
         return ESP_FAIL;
     }
 
+    char text[65] = {0};
+    text_segment_t segments[16];
+    size_t segments_count = 0;
+
     cJSON *text_json = cJSON_GetObjectItemCaseSensitive(root, "text");
-    if (!cJSON_IsString(text_json) || text_json->valuestring == NULL) {
-        cJSON_Delete(root);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing text");
-        return ESP_FAIL;
+    if (text_json != NULL) {
+        if (!cJSON_IsString(text_json) || text_json->valuestring == NULL) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing text");
+            return ESP_FAIL;
+        }
+        size_t text_len = strlen(text_json->valuestring);
+        if (text_len > sizeof(text) - 1) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Text exceeds limit of 64 characters");
+            return ESP_FAIL;
+        }
+        memcpy(text, text_json->valuestring, text_len);
+        text[text_len] = '\0';
+        segments[0].offset = 0;
+        segments[0].length = text_len;
+        segments_count = 1;
     }
 
-    const char *text = text_json->valuestring;
 
     uint32_t speed_ms = 100;
 
@@ -278,7 +298,7 @@ static esp_err_t text_handler(httpd_req_t *req) {
         speed_ms = (uint32_t)speed_json->valueint;
     }
 
-    rgb_t color = {255, 0, 0};
+    rgb_t color = {255, 255, 255};
 
     cJSON *color_json = cJSON_GetObjectItemCaseSensitive(root, "color");
     if (color_json != NULL) {
@@ -302,10 +322,104 @@ static esp_err_t text_handler(httpd_req_t *req) {
         };
     }
 
+    if (strlen(text) > 0) {
+        segments[0].color = color;
+    }
+
+    cJSON *segments_json = cJSON_GetObjectItemCaseSensitive(root, "segments");
+    if (segments_json != NULL) {
+        if (text_json != NULL) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Cannot specify both text and segments");
+            return ESP_FAIL;
+        }
+        if (!cJSON_IsArray(segments_json)) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "segments must be an array");
+            return ESP_FAIL;
+        }
+        if (cJSON_GetArraySize(segments_json) > 16) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Segments count exceeds limit");
+            return ESP_FAIL;
+        }
+        if (cJSON_GetArraySize(segments_json) == 0) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Segments array empty");
+            return ESP_FAIL;
+        }
+
+        size_t used = 0;
+        cJSON *segment = NULL;
+        cJSON_ArrayForEach(segment, segments_json) {
+            rgb_t color = {255, 255, 255};
+            cJSON *text_segment_json = cJSON_GetObjectItemCaseSensitive(segment, "text");
+            if (text_segment_json == NULL || text_segment_json->valuestring == NULL) {
+                cJSON_Delete(root);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing text in segment");
+                return ESP_FAIL;
+            }
+            if (!cJSON_IsString(text_segment_json)) {
+                cJSON_Delete(root);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid text format");
+                return ESP_FAIL;
+            }
+            const char *part = text_segment_json->valuestring;
+            size_t part_len = strlen(part);
+            if (part_len == 0) {
+                cJSON_Delete(root);
+                return httpd_resp_send_err(
+                    req, HTTPD_400_BAD_REQUEST, "Segment text must not be empty"
+                );
+            }
+            if (part_len > sizeof(text) - 1 - used) {
+                cJSON_Delete(root);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Text length exceeds 64 characters limit");
+                return ESP_FAIL;
+            }
+            cJSON *segment_color_json = cJSON_GetObjectItemCaseSensitive(segment, "color");
+            if (segment_color_json != NULL) {
+                cJSON *r_json = cJSON_GetObjectItemCaseSensitive(segment_color_json, "r");
+                cJSON *g_json = cJSON_GetObjectItemCaseSensitive(segment_color_json, "g");
+                cJSON *b_json = cJSON_GetObjectItemCaseSensitive(segment_color_json, "b");
+
+                if (!cJSON_IsNumber(r_json) || !cJSON_IsNumber(g_json) || !cJSON_IsNumber(b_json) ||
+                    r_json->valueint < 0 || r_json->valueint > 255 ||
+                    g_json->valueint < 0 || g_json->valueint > 255 ||
+                    b_json->valueint < 0 || b_json->valueint > 255) {
+                    cJSON_Delete(root);
+                    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid color");
+                    return ESP_FAIL;
+                }
+
+                color = (rgb_t){
+                    .r = (uint8_t)r_json->valueint,
+                    .g = (uint8_t)g_json->valueint,
+                    .b = (uint8_t)b_json->valueint,
+                };
+            }
+            segments[segments_count].color = color;
+            segments[segments_count].offset = used;
+            segments[segments_count].length = part_len;
+            memcpy(text + used, part, part_len);
+            used += part_len;
+            text[used] = '\0';
+            segments_count++;
+        }
+    }
+
+    if (strlen(text) == 0) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No text provided");
+        return ESP_FAIL;
+    }
+
     text_display_config_t config = {
         .text = text,
         .color = color,
         .speed_ms = speed_ms,
+        .segment_count = segments_count,
+        .segments = segments
     };
 
     esp_err_t err = s_text_handler(&config);

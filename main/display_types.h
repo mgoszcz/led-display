@@ -2,11 +2,20 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "esp_err.h"
 #include "graphics_types.h"
 
 typedef struct {
+    size_t offset;
+    size_t length;
+    rgb_t color;
+} text_segment_t;
+
+typedef struct {
     const char *text;
+    const text_segment_t *segments;
+    size_t segment_count;
     rgb_t color;
     uint32_t speed_ms;
 } text_display_config_t;

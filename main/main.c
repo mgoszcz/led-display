@@ -127,6 +127,20 @@ void app_main(void)
     ESP_ERROR_CHECK(image_store_get("heart", &heart_image));
     const led_matrix_image_t *demo_images[3] = {heart_image, lightning_image, smile_image};
 
+    const text_segment_t segments[] = {
+        { .offset = 0, .length = 5, .color = {255, 255, 255} },
+        { .offset = 5, .length = 6, .color = {0, 255, 0} },
+    };
+
+    const text_display_config_t config = {
+        .text = "AAPL +1.24%",
+        .segments = segments,
+        .segment_count = sizeof(segments) / sizeof(segments[0]),
+        .speed_ms = 200,
+    };
+
+ESP_ERROR_CHECK(display_controller_display_text(&config));
+
     while (1) {
         ESP_ERROR_CHECK(wifi_display_ap());
 

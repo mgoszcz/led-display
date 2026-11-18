@@ -8,6 +8,7 @@
 #include "font_5x7.h"
 #include "text_display_engine.h"
 #include <string.h>
+#include <stddef.h>
 
 #define RED ((rgb_t){255, 0, 0})
 #define OFF ((rgb_t){0, 0, 0})
@@ -18,6 +19,7 @@
 #define FONT_HEIGHT 7
 #define FONT_SPACING 1
 #define TEXT_VIEWPORT_PIXELS_MAX (32 * 32)
+#define TEXT_MAX_SEGMENTS 16
 
 static const char *TAG = "TEXT_DISPLAY_ENGINE";
 
@@ -30,12 +32,27 @@ static char s_text[TEXT_MAX_CHARS + 1];
 static rgb_t s_text_color;
 static uint32_t s_frame_duration_ms;
 static rgb_t s_viewport_pixels[TEXT_VIEWPORT_PIXELS_MAX];
+static text_segment_t s_segments[TEXT_MAX_SEGMENTS];
+static size_t s_segment_count = 0;
 
 static TaskHandle_t s_task_handle = NULL;
 static esp_timer_handle_t s_timer;
 static uint16_t s_scroll_x = 0;
 static bool s_stop_requested = false;
 static text_frame_renderer_t s_render_frame = NULL;
+
+static esp_err_t get_segment(size_t text_index, text_segment_t *out_segment) {
+    if (out_segment == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < s_segment_count; i++) {
+        if (text_index >= s_segments[i].offset && text_index < (s_segments[i].offset + s_segments[i].length)) {
+            *out_segment = s_segments[i];
+            return ESP_OK;
+        }
+    }
+    return ESP_ERR_NOT_FOUND;
+}
 
 static esp_err_t build_text_image(rgb_t image[TEXT_IMAGE_HEIGHT_MAX][TEXT_IMAGE_WIDTH_MAX]) {
     size_t length = strlen(s_text);
@@ -55,12 +72,24 @@ static esp_err_t build_text_image(rgb_t image[TEXT_IMAGE_HEIGHT_MAX][TEXT_IMAGE_
     for (size_t i = 0; i < length; i++) {
         char c = s_text[i];
         const font_5x7_glyph_t *glyph = font_5x7_get_glyph(c);
+        rgb_t color;
+        if (s_segment_count > 0) {
+            text_segment_t segment = {0};
+            esp_err_t err = get_segment(i, &segment);
+            if (err == ESP_OK) {
+                color = segment.color;
+            } else {
+                return err;
+            }
+        } else {
+            color = s_text_color;
+        }
         for (int y = 0; y < FONT_HEIGHT; y++) {
             for (int x = 0; x < FONT_5X7_WIDTH; x++) {
                 int img_x = s_text_padding_x + i * (FONT_5X7_WIDTH + FONT_SPACING) + x;
                 int img_y = ((s_viewport_height - FONT_5X7_HEIGHT) / 2) + y;
                 if (font_5x7_get_pixel(glyph, x, y)) {
-                    image[img_y][img_x] = s_text_color;
+                    image[img_y][img_x] = color;
                 }
             }
         }
@@ -152,6 +181,13 @@ esp_err_t text_display_start(const text_display_config_t *config, text_frame_ren
         ESP_LOGE(TAG, "Text is NULL");
         return ESP_ERR_INVALID_ARG;
     }
+    if (config->segment_count > TEXT_MAX_SEGMENTS ||
+        (config->segment_count > 0 && config->segments == NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_segment_count = config->segment_count;
+    memcpy(s_segments, config->segments,
+       config->segment_count * sizeof(s_segments[0]));
     s_text_color = config->color;
     if (config->speed_ms != 0) {
         s_frame_duration_ms = config->speed_ms;
