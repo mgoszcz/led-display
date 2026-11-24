@@ -18,6 +18,7 @@ typedef struct {
     size_t segment_count;
     rgb_t color;
     uint32_t speed_ms;
+    bool continuous;
 } text_display_config_t;
 
 typedef esp_err_t (*animation_get_frame_t)(

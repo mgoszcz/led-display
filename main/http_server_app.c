@@ -298,6 +298,17 @@ static esp_err_t text_handler(httpd_req_t *req) {
         speed_ms = (uint32_t)speed_json->valueint;
     }
 
+    bool continuous = false;
+    cJSON *continuous_json = cJSON_GetObjectItemCaseSensitive(root, "continuous");
+    if (continuous_json != NULL) {
+        if (!cJSON_IsBool(continuous_json)) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid continous");
+            return ESP_FAIL;
+        }
+        continuous = cJSON_IsTrue(continuous_json);
+    }
+
     rgb_t color = {255, 255, 255};
 
     cJSON *color_json = cJSON_GetObjectItemCaseSensitive(root, "color");
@@ -419,7 +430,8 @@ static esp_err_t text_handler(httpd_req_t *req) {
         .color = color,
         .speed_ms = speed_ms,
         .segment_count = segments_count,
-        .segments = segments
+        .segments = segments,
+        .continuous = continuous
     };
 
     esp_err_t err = s_text_handler(&config);

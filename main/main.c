@@ -11,7 +11,7 @@
 #include<stdbool.h>
 
 #define DISPLAY_WIDTH 32
-#define DISPLAY_HEIGHT 16
+#define DISPLAY_HEIGHT 32
 
 static bool s_display_setup_text_started = false;
 static const char *TAG = "MAIN";
@@ -137,6 +137,7 @@ void app_main(void)
         .segments = segments,
         .segment_count = sizeof(segments) / sizeof(segments[0]),
         .speed_ms = 200,
+        .continuous = true,
     };
 
 ESP_ERROR_CHECK(display_controller_display_text(&config));

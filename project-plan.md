@@ -649,6 +649,8 @@ Captive portal and automatic opening of the setup page are deferred. Use `http:/
 
 These are known improvement areas. They are not all blockers for the next small milestone.
 
+- Pre-existing text engine lifecycle issue: when `text_task` exits after a viewport-generation or render error, its timer is not stopped/deleted. The task handle becomes NULL, so the next start can skip cleanup and reuse the old timer interval through `timer_init()`. Add a coordinated cleanup path for error exits as well as explicit stop, without racing task notifications. This predates the viewport-only renderer and continuous scrolling changes.
+
 - `wifi_app_start()` starts Wi-Fi and begins connecting, but it does not wait until `IP_EVENT_STA_GOT_IP`. For later reliability, add `wifi_app_wait_connected(timeout_ms)` or an event group.
 - HTTP server currently starts immediately after `wifi_app_start()`. This is acceptable for `/health`, but future user-facing endpoints may want to wait for Wi-Fi connection/IP.
 - Kconfig retains `CONFIG_WIFI_MAX_RETRY`; credential symbols were removed.

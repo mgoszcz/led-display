@@ -26,7 +26,6 @@ static const char *TAG = "TEXT_DISPLAY_ENGINE";
 static uint16_t s_viewport_width;
 static uint16_t s_viewport_height;
 static uint16_t s_text_padding_x;
-static rgb_t s_text_image[TEXT_IMAGE_HEIGHT_MAX][TEXT_IMAGE_WIDTH_MAX];
 static uint16_t s_text_image_width;
 static char s_text[TEXT_MAX_CHARS + 1];
 static rgb_t s_text_color;
@@ -34,6 +33,7 @@ static uint32_t s_frame_duration_ms;
 static rgb_t s_viewport_pixels[TEXT_VIEWPORT_PIXELS_MAX];
 static text_segment_t s_segments[TEXT_MAX_SEGMENTS];
 static size_t s_segment_count = 0;
+static bool s_continuous;
 
 static TaskHandle_t s_task_handle = NULL;
 static esp_timer_handle_t s_timer;
@@ -54,28 +54,31 @@ static esp_err_t get_segment(size_t text_index, text_segment_t *out_segment) {
     return ESP_ERR_NOT_FOUND;
 }
 
-static esp_err_t build_text_image(rgb_t image[TEXT_IMAGE_HEIGHT_MAX][TEXT_IMAGE_WIDTH_MAX]) {
+static esp_err_t build_viewport_pixels() {
+    memset(s_viewport_pixels, 0, sizeof(s_viewport_pixels));
     size_t length = strlen(s_text);
-    if (length > TEXT_MAX_CHARS) {
-        length = TEXT_MAX_CHARS;
-    }
-    s_text_image_width = s_text_padding_x + length * (FONT_5X7_WIDTH + FONT_SPACING) + s_text_padding_x;
-    if (s_text_image_width > TEXT_IMAGE_WIDTH_MAX) {
-        ESP_LOGW(TAG, "Text image width exceeds maximum size");
-        return ESP_ERR_INVALID_SIZE;
-    }
-    for (int y = 0; y < s_viewport_height; y++) {
-        for (int x = 0; x < s_text_image_width; x++) {
-            image[y][x] = OFF;
+    size_t text_width = length * (FONT_5X7_WIDTH + FONT_SPACING);
+    for (int viewport_x = 0; viewport_x < s_viewport_width; viewport_x++) {
+        int world_x = s_scroll_x + viewport_x;
+        int text_x = world_x - s_text_padding_x;
+        if (text_x < 0) {
+            continue;
         }
-    }
-    for (size_t i = 0; i < length; i++) {
-        char c = s_text[i];
-        const font_5x7_glyph_t *glyph = font_5x7_get_glyph(c);
+        if (text_x >= text_width) {
+            if (!s_continuous) {
+                continue;
+            }
+            text_x = text_x % text_width;
+        }
+        int char_index = text_x / (FONT_5X7_WIDTH + FONT_SPACING);
+        int char_position = text_x % (FONT_5X7_WIDTH + FONT_SPACING);
+        if (char_position >= FONT_5X7_WIDTH) {
+            continue;
+        }
         rgb_t color;
         if (s_segment_count > 0) {
             text_segment_t segment = {0};
-            esp_err_t err = get_segment(i, &segment);
+            esp_err_t err = get_segment(char_index, &segment);
             if (err == ESP_OK) {
                 color = segment.color;
             } else {
@@ -84,13 +87,12 @@ static esp_err_t build_text_image(rgb_t image[TEXT_IMAGE_HEIGHT_MAX][TEXT_IMAGE_
         } else {
             color = s_text_color;
         }
-        for (int y = 0; y < FONT_HEIGHT; y++) {
-            for (int x = 0; x < FONT_5X7_WIDTH; x++) {
-                int img_x = s_text_padding_x + i * (FONT_5X7_WIDTH + FONT_SPACING) + x;
-                int img_y = ((s_viewport_height - FONT_5X7_HEIGHT) / 2) + y;
-                if (font_5x7_get_pixel(glyph, x, y)) {
-                    image[img_y][img_x] = color;
-                }
+        char character = s_text[char_index];
+        const font_5x7_glyph_t *glyph = font_5x7_get_glyph(character);
+        for (int y = 0; y < FONT_5X7_HEIGHT; y++) {
+            int img_y = ((s_viewport_height - FONT_5X7_HEIGHT) / 2) + y;
+            if (font_5x7_get_pixel(glyph, char_position, y)) {
+                s_viewport_pixels[img_y * s_viewport_width + viewport_x] = color;
             }
         }
     }
@@ -121,13 +123,6 @@ static esp_err_t timer_init() {
 }
 
 static void text_task(void *arg) {
-    esp_err_t err = build_text_image(s_text_image);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to build text image: %s", esp_err_to_name(err));
-        s_task_handle = NULL;
-        vTaskDelete(NULL);
-        return;
-    }
     while (1) {
         uint16_t length = s_text_image_width; // Exclude padding from length for scrolling
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -136,14 +131,18 @@ static void text_task(void *arg) {
             break;
         }
 
-        for (int y = 0; y < s_viewport_height; y++) {
-            for (int x = 0; x < s_viewport_width; x++) {
-                s_viewport_pixels[y * s_viewport_width + x] = s_text_image[y][x + s_scroll_x];
-            }
+        esp_err_t err = build_viewport_pixels();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to build viewport: %s", esp_err_to_name(err));
+            s_task_handle = NULL;
+            vTaskDelete(NULL);
+            return;
         }
 
         s_scroll_x++;
-        if (s_scroll_x + s_viewport_width > length) {
+        if (!s_continuous && (s_scroll_x + s_viewport_width > length)) {
+            s_scroll_x = 0;
+        } else if (s_continuous && s_scroll_x >= s_text_image_width) {
             s_scroll_x = 0;
         }
 
@@ -185,6 +184,12 @@ esp_err_t text_display_start(const text_display_config_t *config, text_frame_ren
         (config->segment_count > 0 && config->segments == NULL)) {
         return ESP_ERR_INVALID_ARG;
     }
+    s_continuous = config->continuous;
+    if (s_continuous) {
+        s_text_padding_x = 0;
+    } else {
+        s_text_padding_x = s_viewport_width;
+    }
     s_segment_count = config->segment_count;
     memcpy(s_segments, config->segments,
        config->segment_count * sizeof(s_segments[0]));
@@ -197,6 +202,11 @@ esp_err_t text_display_start(const text_display_config_t *config, text_frame_ren
     strlcpy(s_text, config->text, sizeof(s_text));
     s_scroll_x = 0;
     s_render_frame = render_frame;
+    s_text_image_width = s_text_padding_x + strlen(s_text) * (FONT_5X7_WIDTH + FONT_SPACING) + s_text_padding_x;
+    if (s_text_image_width > TEXT_IMAGE_WIDTH_MAX) {
+        ESP_LOGW(TAG, "Text image width exceeds maximum size");
+        return ESP_ERR_INVALID_SIZE;
+    }
     BaseType_t task_created = xTaskCreate(text_task, "text_task", 4096, NULL, 5, &s_task_handle);
     if (task_created != pdPASS) {
         return ESP_ERR_NO_MEM;
